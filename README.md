@@ -1,200 +1,227 @@
-# RelayX - Modular Relayer Service
+A Rust implementation of the [Generic Relayer Architecture for Smart Accounts EIP](https://hackmd.io/T4TkZYFQQnCupiuW231DYw) that enables gasless and sponsored transactions for smart accounts through a standardized JSON-RPC interface.
 
-A modular Rust-based relayer service that provides JSON-RPC endpoints for managing blockchain transaction relay requests with persistent storage using RocksDB.
+## Overview
 
-## Features
+This relayer service provides a standardized off-chain architecture that allows smart accounts to execute gasless transactions and token-fee payments. The service acts as an intermediary between wallets/dApps and the blockchain, handling transaction submission, gas payment, and status tracking.
 
-- **JSON-RPC Service**: HTTP-based JSON-RPC server with three endpoints
-- **Persistent Storage**: RocksDB-based key-value storage for all requests and responses
-- **CLI Configuration**: Command-line interface for easy configuration
-- **Modular Architecture**: Clean separation of concerns with dedicated modules
-- **Async Runtime**: Built on Tokio for high-performance async operations
-- **Comprehensive Logging**: Structured logging with tracing
+### Key Features
+
+- **Gasless Transactions**: Users can pay transaction fees using ERC-20 tokens instead of native tokens
+- **Transaction Relaying**: Submit signed transactions through a relayer instead of directly to the network  
+- **Real-time Exchange Rates**: Get current token-to-gas conversion rates using Chainlink price feeds
+- **Transaction Status Tracking**: Monitor the lifecycle of submitted transactions
+- **Multi-chain Support**: Configurable support for multiple blockchain networks
+- **Health Monitoring**: Built-in health check and metrics endpoints
 
 ## Architecture
 
-The service is organized into the following modules:
+The service implements a modular JSON-RPC server with the following components:
 
-- **`config`**: CLI argument parsing and configuration management
-- **`rpc`**: JSON-RPC server implementation with three endpoints
-- **`storage`**: RocksDB-based persistent storage layer
-- **`types`**: Data structures and type definitions
-
-## JSON-RPC Endpoints
-
-### 1. `submit_request`
-
-Submits a new relayer request for processing.
-
-**Parameters:**
-```json
-{
-  "from_address": "0x...",
-  "to_address": "0x...",
-  "amount": "1000000000000000000",
-  "gas_limit": 21000,
-  "gas_price": "20000000000",
-  "data": "0x...",
-  "nonce": 0,
-  "chain_id": 1
-}
+```
+┌─────────────┐    ┌──────────────┐    ┌─────────────────┐    ┌─────────────┐
+│   dApp/     │───▶│    Relayer   │───▶│   Blockchain    │───▶│   Smart     │
+│   Wallet    │    │   RPC Server │    │    Networks     │    │  Accounts   │
+└─────────────┘    └──────────────┘    └─────────────────┘    └─────────────┘
+                          │
+                          ▼
+                   ┌─────────────┐
+                   │  Storage    │
+                   │  (Requests, │
+                   │   Status)   │
+                   └─────────────┘
 ```
 
-**Response:**
-```json
-"uuid-of-request"
-```
+## Build and Run
 
-### 2. `get_request_status`
+### Requirements
+- Rust (stable) and Cargo
+- RocksDB system libraries
 
-Retrieves the current status of a relayer request.
-
-**Parameters:**
-```json
-"uuid-of-request"
-```
-
-**Response:**
-```json
-{
-  "request_id": "uuid",
-  "transaction_hash": null,
-  "block_number": null,
-  "gas_used": null,
-  "status": "Pending",
-  "completed_at": null,
-  "error_message": null
-}
-```
-
-### 3. `health_check`
-
-Returns the health status and statistics of the service.
-
-**Parameters:**
-```json
-null
-```
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "uptime_seconds": 3600,
-  "total_requests": 100,
-  "pending_requests": 10,
-  "completed_requests": 85,
-  "failed_requests": 5
-}
-```
-
-## Building and Running
-
-### Prerequisites
-
-- Rust 1.70+ and Cargo
-- RocksDB development libraries
-
-### Install RocksDB Dependencies
-
-#### macOS
+### Install system dependencies
+- macOS:
 ```bash
 brew install rocksdb
 ```
-
-#### Ubuntu/Debian
+- Ubuntu/Debian:
 ```bash
-sudo apt-get install librocksdb-dev
-```
-
-#### CentOS/RHEL
-```bash
-sudo yum install rocksdb-devel
+sudo apt-get update && sudo apt-get install -y librocksdb-dev
 ```
 
 ### Build
-
 ```bash
 cargo build --release
 ```
 
-### Run
-
+### Run (CLI)
 ```bash
-# Basic usage with defaults
-./target/release/relayx
-
-# Custom configuration
 ./target/release/relayx \
-  --rpc-host 0.0.0.0 \
-  --rpc-port 8545 \
-  --db-path /var/lib/relayx \
-  --relayers "0x123...,0x456..." \
-  --max-concurrent-requests 200 \
-  --request-timeout 60
+  --http-address 0.0.0.0 \
+  --http-port 4937 \
+  --http-cors "*" \
+  --db-path ./relayx_db
 ```
 
-## Configuration Options
+You can also configure via a JSON file (and override with CLI/env):
+- Set RELAYX_CONFIG=/path/to/config.json
+- File supports fields: `http_address`, `http_port`, `http_cors`, `feeCollector`, `rpcs`, and `chainlink` feeds.
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--rpc-host` | RPC server host address | `127.0.0.1` |
-| `--rpc-port` | RPC server port | `8545` |
-| `--db-path` | Database path for RocksDB | `./relayx_db` |
-| `--relayers` | Comma-separated list of relayer addresses | (empty) |
-| `--max-concurrent-requests` | Maximum concurrent requests | `100` |
-| `--request-timeout` | Request timeout in seconds | `30` |
+### Run (Docker)
+```bash
+docker build -t relayx:latest .
+# minimal
+docker run --rm -p 4937:4937 relayx:latest
+# with a config file
+docker run --rm -p 4937:4937 -e RELAYX_CONFIG=/app/config.json \
+  -v /abs/path/config.json:/app/config.json:ro relayx:latest
+```
 
-## Example Usage
+## Configuration
+CLI flags (env in parentheses) and defaults:
+- --http-address (HTTP_ADDRESS): 127.0.0.1
+- --http-port (HTTP_PORT): 4937
+- --http-cors (HTTP_CORS): "*"
+- --db-path: ./relayx_db
+- --config (RELAYX_CONFIG): optional JSON with:
+  - `http_address`, `http_port`, `http_cors`
+  - `feeCollector`: address string
+  - `rpcs`: { "1": "https://...", "137": "https://..." }
+  - `chainlink.nativeUsd`: { chainId: feedAddress }
+  - `chainlink.tokenUsd`: { chainId: { tokenAddressLowercased: feedAddress } }
 
-### Submit a Request
+## Supported JSON-RPC Methods
+
+### Core Relayer Methods
+
+1. **`relayer_getExchangeRate`** - Get token exchange rates for gas payment
+2. **`relayer_getQuote`** - Simulate transactions and get gas estimates  
+3. **`relayer_sendTransaction`** - Submit signed transactions for relay
+4. **`relayer_getStatus`** - Check status of submitted transactions
+5. **`health_check`** - Service health and metrics
+
+## Usage Examples
+
+### Get Exchange Rate
+
+Request the current rate for paying gas fees with USDC:
 
 ```bash
 curl -X POST http://localhost:8545 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
-    "id": 1,
-    "method": "submit_request",
+    "method": "relayer_getExchangeRate", 
+    "params": [{
+      "chainId": "1",
+      "token": "0xA0b86a33E6441e6ae7Db1Ce1E5fD4A2Df00b8BB0"
+    }],
+    "id": 1
+  }'
+```
+
+Response:
+```json
+{
+  "jsonrpc": "2.0",
+  "result": [{
+    "quote": {
+      "rate": 30.5,
+      "token": {
+        "decimals": 6,
+        "address": "0xA0b86a33E6441e6ae7Db1Ce1E5fD4A2Df00b8BB0",
+        "symbol": "USDC",
+        "name": "USD Coin"
+      }
+    },
+    "gasPrice": "0x4a817c800",
+    "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
+    "expiry": 1755917874
+  }],
+  "id": 1
+}
+```
+
+### Get Transaction Quote
+
+Simulate a transaction to get gas estimates and required fees:
+
+```bash
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "relayer_getQuote",
+    "params": [{
+      "to": "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6",
+      "data": "0xa9059cbb000000000000000000000000742d35cc6c3c3f4b4c1b3cd6c0d1b6c2b3d4e5f60000000000000000000000000000000000000000000000000de0b6b3a7640000",
+      "chainId": "1",
+      "capabilities": {
+        "payment": {
+          "type": "erc20",
+          "token": "0xA0b86a33E6441e6ae7Db1Ce1E5fD4A2Df00b8BB0"
+        }
+      }
+    }],
+    "id": 2
+  }'
+```
+
+### Submit Transaction
+
+Submit a signed transaction for relay:
+
+```bash
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0", 
+    "method": "relayer_sendTransaction",
+    "params": [{
+      "to": "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6",
+      "data": "0x...", 
+      "chainId": "1",
+      "capabilities": {
+        "payment": {
+          "type": "erc20", 
+          "token": "0xA0b86a33E6441e6ae7Db1Ce1E5fD4A2Df00b8BB0"
+        }
+      }
+    }],
+    "id": 3
+  }'
+```
+
+### Check Transaction Status
+
+Query the status of a submitted transaction:
+
+```bash  
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "relayer_getStatus", 
     "params": {
-      "from_address": "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6",
-      "to_address": "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6",
-      "amount": "1000000000000000000",
-      "gas_limit": 21000,
-      "gas_price": "20000000000",
-      "data": "0x",
-      "nonce": 0,
-      "chain_id": 1
-    }
+      "ids": ["0x00000000000000000000000000000000000000000000000000000000000000000e670ec64341771606e55d6b4ca35a1a6b75ee3d5145a99d05921026d1527331"]
+    },
+    "id": 4
   }'
 ```
 
-### Check Request Status
+## Configuration
 
-```bash
-curl -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "method": "get_request_status",
-    "params": "uuid-from-previous-response"
-  }'
-```
+### Environment Variables
 
-### Health Check
+Key environment variables for configuration:
 
-```bash
-curl -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 3,
-    "method": "health_check",
-    "params": null
-  }'
-```
+- `ETH_RPC_URL` / `RPC_URL` - Default RPC endpoint  
+- `RELAYX_FEE_COLLECTOR` - Address to receive relayer fees
+- `CHAINLINK_ETH_USD` - Chainlink ETH/USD price feed address
+- `CHAINLINK_TOKEN_USD` - Chainlink token/USD price feed address
+
+### Feature Flags
+
+- `onchain` - Enable real blockchain interactions (default: enabled)
+  - When disabled, returns stub responses for testing
 
 ## Development
 
@@ -202,39 +229,41 @@ curl -X POST http://localhost:8545 \
 
 ```
 src/
-├── main.rs          # Application entry point
-├── lib.rs           # Module definitions
-├── config.rs        # Configuration and CLI parsing
-├── rpc.rs           # JSON-RPC server implementation
-├── storage.rs       # RocksDB storage layer
-└── types.rs         # Data structures and types
+├── main.rs              # Application entry point
+├── config.rs            # Configuration management  
+├── storage.rs           # Data persistence layer
+├── types.rs            # JSON-RPC request/response types
+└── rpc_server.rs       # Main RPC server implementation
 ```
 
-### Adding New Endpoints
+### Key Components
 
-To add new RPC endpoints, modify the `src/rpc.rs` file and add new methods to the `IoHandler`:
+#### RpcServer
+The main server struct that:
+- Handles JSON-RPC method routing
+- Manages provider connections with caching
+- Processes business logic for each endpoint
 
-```rust
-io.add_method("new_method", move |params: Value| {
-    // Implementation here
-    async move {
-        // Async logic
-    }
-});
-```
+#### Storage Layer
+Persistent storage for:
+- Transaction requests and status
+- Request metrics and counts  
+- System uptime tracking
 
-### Extending Storage
+#### Price Feed Integration
+When `onchain` feature is enabled:
+- Fetches real-time gas prices from blockchain
+- Queries Chainlink price feeds for token rates
+- Calculates exchange rates: `(gasPrice * ETH_price) / token_price`
 
-The storage layer in `src/storage.rs` can be extended with new methods for additional data types or query patterns.
+## Development
+- lint: `make lint` (fmt, clippy, cargo-sort, udeps, audit)
+- build: `make build`
+- run example client: see `examples/test_client.rs`
+
+## CI/CD
+- PR CI runs fmt/clippy/sort/udeps/audit
+- On PR merge to main/master, a multi-arch Docker image is published to GHCR
 
 ## License
-
-This project is licensed under the MIT License.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+MIT
