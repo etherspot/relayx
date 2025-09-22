@@ -41,13 +41,13 @@ jobs:
           cargo install cargo-audit --locked || true
 
       - name: cargo fmt (check)
-        run: cargo fmt --all -- --check
+        run: cargo +stable fmt --all -- --check
 
       - name: cargo clippy (deny warnings)
-        run: cargo clippy --all --all-targets -- -D warnings
+        run: cargo +stable clippy --all --all-targets -- -D warnings
 
       - name: cargo sort (check)
-        run: cargo sort --grouped --check
+        run: cargo +stable sort --grouped --check
 
       - name: cargo udeps (nightly)
         run: cargo +nightly udeps --all-targets
