@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  lint-and-udeps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target
+        uses: actions/cache@v4
+        with:
+          path: |
+            target
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Rust toolchains
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo tools
+        run: |
+          cargo install cargo-sort --locked || true
+          cargo install cargo-udeps --locked || true
+          cargo install cargo-audit --locked || true
+
+      - name: cargo fmt (check)
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --all --all-targets -- -D warnings
+
+      - name: cargo sort (check)
+        run: cargo sort --grouped --check
+
+      - name: cargo udeps (nightly)
+        run: cargo +nightly udeps --all-targets
+
+      - name: cargo audit (advisory DB)
+        run: cargo audit --db-urls https://github.com/RustSec/advisory-db.git --deny warnings
