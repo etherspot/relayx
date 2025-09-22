@@ -51,13 +51,13 @@ jobs:
         run: cargo +stable fmt --all -- --check
 
       - name: cargo clippy (deny warnings)
-        run: cargo +stable clippy --all --all-targets -- -D warnings
+        run: cargo clippy --all --all-targets --no-deps -- --deny warnings
 
       - name: cargo sort (check)
         run: cargo +stable sort --grouped --check
 
       - name: cargo udeps (nightly)
-        run: cargo +nightly udeps --all-targets
+        run: cargo +nightly udeps --all-targets --release
 
       - name: cargo audit (advisory DB)
         run: cargo audit --db-urls https://github.com/RustSec/advisory-db.git --deny warnings
