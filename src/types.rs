@@ -83,8 +83,8 @@ pub struct HealthResponse {
 pub struct TokenInfo {
     pub decimals: u8,
     pub address: String,
-    pub symbol: String,
-    pub name: String,
+    pub symbol: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,24 +214,45 @@ pub struct ExchangeRateRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExchangeRateQuote {
-    pub rate: u64, // for 1 unit of gas in 6-decimal USDC representation
+    pub rate: f64, // for 1 unit of gas in token's decimals
     pub token: TokenInfo,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExchangeRateResponse {
+pub struct ExchangeRateSuccess {
     pub quote: ExchangeRateQuote,
     #[serde(rename = "gasPrice")]
     pub gas_price: String,
     #[serde(rename = "maxFeePerGas")]
-    pub max_fee_per_gas: String,
+    pub max_fee_per_gas: Option<String>,
     #[serde(rename = "maxPriorityFeePerGas")]
-    pub max_priority_fee_per_gas: String,
-    #[serde(rename = "relayerCalls")]
-    pub relayer_calls: Vec<RelayerCall>,
+    pub max_priority_fee_per_gas: Option<String>,
     #[serde(rename = "feeCollector")]
     pub fee_collector: String,
     pub expiry: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangeRateErrorBody {
+    pub id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangeRateError {
+    pub error: ExchangeRateErrorBody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ExchangeRateResultItem {
+    Success(ExchangeRateSuccess),
+    Error(ExchangeRateError),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangeRateResponse {
+    pub result: Vec<ExchangeRateResultItem>,
 }
 
 // ===== relayer_getQuote =====

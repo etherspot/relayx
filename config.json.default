@@ -1,0 +1,25 @@
+{
+  "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
+  "http_address": "127.0.0.1",
+  "http_port": 4937,
+  "http_cors": "*",
+  "rpcs": {
+    "1": "https://ethereum.publicnode.com",
+    "10": "https://mainnet.optimism.io",
+    "56": "https://bsc-dataseed.binance.org",
+    "137": "https://polygon-rpc.com",
+    "42161": "https://arb1.arbitrum.io/rpc",
+    "8453": "https://mainnet.base.org"
+  },
+  "chainlink": {
+    "nativeUsd": {
+      "1": "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419"
+    },
+    "tokenUsd": {
+      "1": {
+        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": "0x8fffffd4afb6115b954bd326cbe7b4ba576818f6" 
+      }
+    }
+  }
+}
+

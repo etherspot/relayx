@@ -1,10 +1,11 @@
-use crate::types::{RelayerRequest, RelayerResponse, RequestStatus};
+use std::{path::Path, sync::Arc};
+
 use anyhow::Result;
 use rocksdb::{DBWithThreadMode, MultiThreaded, Options};
 use serde_json;
-use std::path::Path;
-use std::sync::Arc;
 use uuid::Uuid;
+
+use crate::types::{RelayerRequest, RelayerResponse, RequestStatus};
 
 pub struct Storage {
     db: Arc<DBWithThreadMode<MultiThreaded>>,
@@ -90,7 +91,10 @@ impl Storage {
     /// Get all requests with optional filtering
     pub async fn get_requests(&self, limit: Option<usize>) -> Result<Vec<RelayerRequest>> {
         let mut requests = Vec::new();
-        let iter = self.db.iterator(rocksdb::IteratorMode::Start);
+        let iter = self.db.iterator(rocksdb::IteratorMode::From(
+            b"request:",
+            rocksdb::Direction::Forward,
+        ));
 
         for result in iter {
             let (key, value) = result?;
@@ -106,6 +110,8 @@ impl Storage {
                         }
                     }
                 }
+            } else {
+                break;
             }
         }
 
@@ -115,10 +121,18 @@ impl Storage {
     /// Get request count by status
     pub async fn get_request_count_by_status(&self, status: RequestStatus) -> Result<u64> {
         let mut count = 0;
-        let iter = self.db.iterator(rocksdb::IteratorMode::Start);
+        let iter = self.db.iterator(rocksdb::IteratorMode::From(
+            b"request:",
+            rocksdb::Direction::Forward,
+        ));
 
         for result in iter {
-            let (_, value) = result?;
+            let (key, value) = result?;
+            let key_str = String::from_utf8_lossy(&key);
+
+            if !key_str.starts_with("request:") {
+                break;
+            }
 
             if let Ok(request) = serde_json::from_slice::<RelayerRequest>(&value) {
                 if request.status == status {
@@ -133,7 +147,10 @@ impl Storage {
     /// Get total request count
     pub async fn get_total_request_count(&self) -> Result<u64> {
         let mut count = 0;
-        let iter = self.db.iterator(rocksdb::IteratorMode::Start);
+        let iter = self.db.iterator(rocksdb::IteratorMode::From(
+            b"request:",
+            rocksdb::Direction::Forward,
+        ));
 
         for result in iter {
             let (key, _) = result?;
@@ -141,6 +158,8 @@ impl Storage {
 
             if key_str.starts_with("request:") {
                 count += 1;
+            } else {
+                break;
             }
         }
 
