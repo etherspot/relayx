@@ -16,9 +16,9 @@ async fn main() -> Result<()> {
     let storage = Storage::new(&config.db_path)?;
 
     // Create and start RPC server
-    let rpc_host = config.rpc_host.clone();
-    let rpc_port = config.rpc_port;
-    let rpc_server = RpcServer::new(config.rpc_host, config.rpc_port, storage.clone())?;
+    let rpc_host = config.get_http_address();
+    let rpc_port = config.get_http_port();
+    let rpc_server = RpcServer::new(rpc_host.clone(), rpc_port, storage.clone(), config.clone())?;
 
     tracing::info!("RPC server started on {}:{}", rpc_host, rpc_port);
 

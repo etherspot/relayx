@@ -1,144 +1,538 @@
-use crate::storage::Storage;
-use crate::types::{
-    HealthResponse, NewRequestInput, RelayerRequest, RelayerResponse, RequestStatus,
-};
+use std::net::SocketAddr;
+#[cfg(feature = "onchain")]
+use std::{collections::HashMap, str::FromStr, sync::Arc};
+
+/// Alloy imports for on-chain calls
+#[cfg(feature = "onchain")]
+use alloy::primitives::{address, Address as AlloyAddress, U256 as AlloyU256};
+#[cfg(feature = "onchain")]
+use alloy::providers::{Provider, ProviderBuilder, RootProvider};
+#[cfg(feature = "onchain")]
+use alloy::sol;
 use anyhow::Result;
 use chrono::Utc;
 use jsonrpc_core::{IoHandler, Params};
 use jsonrpc_http_server::ServerBuilder;
-use serde_json::Value;
-use std::net::SocketAddr;
+#[cfg(feature = "onchain")]
+use tokio::sync::RwLock;
 use uuid::Uuid;
+
+use crate::{
+    config::Config,
+    storage::Storage,
+    types::{
+        ExchangeRateRequest, ExchangeRateResponse, ExchangeRateResultItem, GetStatusRequest,
+        GetStatusResponse, HealthResponse, Log, OffchainFailure, OnchainFailure, QuoteInner,
+        QuoteRequest, QuoteResponse, Receipt, RelayerCall, RequestStatus, Resubmission,
+        SendTransactionRequest, SendTransactionResponse, SendTransactionResult, StatusResult,
+        TokenInfo,
+    },
+};
 
 pub struct RpcServer {
     host: String,
     port: u16,
     storage: Storage,
+    config: Config,
+    #[cfg(feature = "onchain")]
+    provider_cache: Arc<RwLock<HashMap<String, RootProvider>>>,
+}
+
+/// Endpoint business logic functions
+async fn process_send_transaction(
+    _storage: Storage,
+    _input: &SendTransactionRequest,
+    _cfg: &Config,
+) -> Result<SendTransactionResponse, jsonrpc_core::Error> {
+    // For now, return stub result as per existing stubbed builder
+    Ok(SendTransactionResponse {
+        result: vec![SendTransactionResult {
+            chain_id: "1".into(),
+            id: String::new(),
+        }],
+    })
+}
+
+async fn process_get_status(
+    storage: Storage,
+    request: &GetStatusRequest,
+    _cfg: &Config,
+) -> Result<GetStatusResponse, jsonrpc_core::Error> {
+    for id in &request.ids {
+        if let Ok(uuid) = Uuid::parse_str(id) {
+            if let Ok(Some(_req)) = storage.get_request(uuid).await {
+                // Could enrich response using stored data
+            }
+        }
+    }
+    Ok(build_get_status_response(request))
+}
+
+async fn process_health_check(
+    storage: Storage,
+    _cfg: &Config,
+) -> Result<HealthResponse, jsonrpc_core::Error> {
+    let total_requests = storage
+        .get_total_request_count()
+        .await
+        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+
+    let pending_requests = storage
+        .get_request_count_by_status(RequestStatus::Pending)
+        .await
+        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+
+    let completed_requests = storage
+        .get_request_count_by_status(RequestStatus::Completed)
+        .await
+        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+
+    let failed_requests = storage
+        .get_request_count_by_status(RequestStatus::Failed)
+        .await
+        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+
+    Ok(build_health_response(
+        storage.get_uptime_seconds(),
+        total_requests,
+        pending_requests,
+        completed_requests,
+        failed_requests,
+    ))
+}
+
+// (unused) Kept for potential reuse; prefer cached path used in start()
+// async fn process_get_exchange_rate(cfg: &Config, input: &ExchangeRateRequest) ->
+// Result<ExchangeRateResponse, jsonrpc_core::Error> { 	let now = Utc::now().timestamp() as u64;
+// 	let expiry = now + 600;
+// 	Ok(build_exchange_rate_response_with_provider(cfg, &get_or_create_provider(cfg,
+// &input.chain_id).await, input, expiry).await) }
+
+// async fn process_get_quote(_cfg: &Config) -> Result<QuoteResponse, jsonrpc_core::Error> {
+//     Ok(build_quote_response())
+// }
+
+/// Build a response for the health_check endpoint
+fn build_health_response(
+    uptime_seconds: u64,
+    total_requests: u64,
+    pending_requests: u64,
+    completed_requests: u64,
+    failed_requests: u64,
+) -> HealthResponse {
+    HealthResponse {
+        status: "healthy".to_string(),
+        timestamp: Utc::now(),
+        uptime_seconds,
+        total_requests,
+        pending_requests,
+        completed_requests,
+        failed_requests,
+    }
+}
+
+/// Build a response for the relayer_getExchangeRate endpoint
+/// Resolve an RPC URL for a given chainId using global config with env fallbacks
+#[cfg(feature = "onchain")]
+fn resolve_rpc_url(chain_id: &str, cfg: &Config) -> String {
+    cfg.rpc_url_for_chain(chain_id)
+        .or_else(|| std::env::var("ETH_RPC_URL").ok())
+        .or_else(|| std::env::var("RPC_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:8545".to_string())
+}
+
+/// Get a provider for a chainId using only the provided Config (no cache)
+#[cfg(feature = "onchain")]
+#[cfg(feature = "onchain")]
+async fn get_or_create_provider(cfg: &Config, chain_id: &str) -> RootProvider {
+    let rpc_url = resolve_rpc_url(chain_id, cfg);
+    ProviderBuilder::new().on_http(rpc_url.parse().unwrap())
+}
+
+/// Get or insert a cached provider for a chainId using the server's cache
+#[cfg(feature = "onchain")]
+async fn get_or_create_provider_with_cache(
+    cfg: &Config,
+    chain_id: &str,
+    cache: &Arc<RwLock<HashMap<String, RootProvider>>>,
+) -> RootProvider {
+    {
+        let read = cache.read().await;
+        if let Some(p) = read.get(chain_id) {
+            return p.clone();
+        }
+    }
+    let rpc_url = resolve_rpc_url(chain_id, cfg);
+    let provider = ProviderBuilder::new().on_http(rpc_url.parse().unwrap());
+    let mut write = cache.write().await;
+    write.insert(chain_id.to_string(), provider.clone());
+    provider
+}
+
+#[cfg(feature = "onchain")]
+fn get_fee_collector(cfg: &Config) -> String {
+    std::env::var("RELAYX_FEE_COLLECTOR")
+        .ok()
+        .or_else(|| cfg.fee_collector())
+        .unwrap_or_else(|| "".to_string())
+}
+
+#[cfg(feature = "onchain")]
+fn resolve_chainlink_feeds(cfg: &Config, chain_id: &str, token: &str) -> Option<(String, String)> {
+    let native = cfg
+        .chainlink_native_usd(chain_id)
+        .or_else(|| std::env::var("CHAINLINK_ETH_USD").ok());
+    let token_feed = cfg
+        .chainlink_token_usd(chain_id, token)
+        .or_else(|| std::env::var("CHAINLINK_TOKEN_USD").ok());
+    match (native, token_feed) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "onchain")]
+async fn build_exchange_rate_response_with_provider(
+    cfg: &Config,
+    provider: &RootProvider,
+    req: &ExchangeRateRequest,
+    expiry: u64,
+) -> ExchangeRateResponse {
+    // Define Chainlink AggregatorV3 and ERC20 interfaces
+    sol! {
+        interface AggregatorV3Interface {
+            function decimals() external view returns (uint8);
+            function latestRoundData() external view returns (
+                uint80 roundId,
+                int256 answer,
+                uint256 startedAt,
+                uint256 updatedAt,
+                uint80 answeredInRound
+            );
+        }
+
+        interface ERC20 {
+            function decimals() external view returns (uint8);
+            function symbol() external view returns (string);
+            function name() external view returns (string);
+        }
+    }
+
+    // Provider supplied by caller (cached per chain)
+
+    // Get gas price
+    let gas_price_wei: AlloyU256 = match provider.get_gas_price().await {
+        Ok(v) => v,
+        Err(e) => {
+            let err = ExchangeRateResultItem::Error(crate::types::ExchangeRateError {
+                error: crate::types::ExchangeRateErrorBody {
+                    id: "gas_price".to_string(),
+                    message: format!("failed to fetch gas price: {}", e),
+                },
+            });
+            return ExchangeRateResponse { result: vec![err] };
+        }
+    };
+
+    // Hex-encode gas price
+    let gas_price_hex = format!("{:#x}", gas_price_wei);
+
+    // Optional EIP-1559 fields not fetched here
+    let max_fee_per_gas = None;
+    let max_priority_fee_per_gas = None;
+
+    // Zero address denotes native token
+    let zero_addr = "0x0000000000000000000000000000000000000000".to_string();
+
+    // Compute rate
+    let result_item = if req.token.to_lowercase() == zero_addr {
+        // Native token: rate is gasPrice in native units (ETH for chain 1)
+        let rate_native = {
+            // Convert gas price in wei per gas to ETH per gas
+            let num = gas_price_wei.to::<f64>();
+            num / 1e18f64
+        };
+
+        ExchangeRateResultItem::Success(ExchangeRateSuccess {
+            quote: ExchangeRateQuote {
+                rate: rate_native,
+                token: TokenInfo {
+                    decimals: 18,
+                    address: zero_addr.clone(),
+                    symbol: None,
+                    name: None,
+                },
+            },
+            gas_price: gas_price_hex,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            fee_collector: get_fee_collector(cfg),
+            expiry,
+        })
+    } else {
+        // Token: need native/USD and token/USD feeds, resolve via config or env
+        let (eth_usd_addr, token_usd_addr) =
+            match resolve_chainlink_feeds(cfg, &req.chain_id, &req.token) {
+                Some(pair) => pair,
+                None => {
+                    return ExchangeRateResponse {
+                        result: vec![ExchangeRateResultItem::Error(
+                            crate::types::ExchangeRateError {
+                                error: crate::types::ExchangeRateErrorBody {
+                                    id: "config".to_string(),
+                                    message: "missing chainlink feed addresses for native/token"
+                                        .to_string(),
+                                },
+                            },
+                        )],
+                    };
+                }
+            };
+
+        let agg_eth = AggregatorV3Interface::new(AlloyAddress::from_str(&eth_usd_addr).unwrap());
+        let agg_tok = AggregatorV3Interface::new(AlloyAddress::from_str(&token_usd_addr).unwrap());
+
+        // Fetch latest data and decimals
+        let (eth_dec, tok_dec, eth_latest, tok_latest) = match (
+            provider.view_call(agg_eth.decimals()).await,
+            provider.view_call(agg_tok.decimals()).await,
+            provider.view_call(agg_eth.latestRoundData()).await,
+            provider.view_call(agg_tok.latestRoundData()).await,
+        ) {
+            (Ok(eth_dec), Ok(tok_dec), Ok(eth_latest), Ok(tok_latest)) => {
+                (eth_dec._0, tok_dec._0, eth_latest._1, tok_latest._1)
+            }
+            _ => {
+                return ExchangeRateResponse {
+                    result: vec![ExchangeRateResultItem::Error(
+                        crate::types::ExchangeRateError {
+                            error: crate::types::ExchangeRateErrorBody {
+                                id: "chainlink".to_string(),
+                                message: "failed to read chainlink feeds".to_string(),
+                            },
+                        },
+                    )],
+                };
+            }
+        };
+
+        // Convert answers to f64 USD prices
+        let eth_price_usd = (eth_latest as f64) / 10f64.powi(eth_dec as i32);
+        let tok_price_usd = (tok_latest as f64) / 10f64.powi(tok_dec as i32);
+
+        // Token metadata from ERC20
+        let token_addr = AlloyAddress::from_str(&req.token).unwrap_or(address!(0x0));
+        let token = ERC20::new(token_addr);
+        let (token_decimals, token_symbol, token_name) = match (
+            provider.view_call(token.decimals()).await,
+            provider.view_call(token.symbol()).await,
+            provider.view_call(token.name()).await,
+        ) {
+            (Ok(d), Ok(s), Ok(n)) => (d._0, Some(s._0), Some(n._0)),
+            (Ok(d), _, _) => (d._0, None, None),
+            _ => (6u8, None, None),
+        };
+
+        // Compute tokens per gas: (gasPrice[ETH/gas] * ETH_USD) / TOKEN_USD
+        let gas_eth = gas_price_wei.to::<f64>() / 1e18f64;
+        let rate_tokens_per_gas = if tok_price_usd > 0.0 {
+            (gas_eth * eth_price_usd) / tok_price_usd
+        } else {
+            0.0
+        };
+
+        ExchangeRateResultItem::Success(ExchangeRateSuccess {
+            quote: ExchangeRateQuote {
+                rate: rate_tokens_per_gas,
+                token: TokenInfo {
+                    decimals: token_decimals,
+                    address: req.token.clone(),
+                    symbol: token_symbol,
+                    name: token_name,
+                },
+            },
+            gas_price: gas_price_hex,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            fee_collector: get_fee_collector(cfg),
+            expiry,
+        })
+    };
+
+    ExchangeRateResponse {
+        result: vec![result_item],
+    }
+}
+
+/// Build a response for the relayer_getStatus endpoint
+fn build_get_status_response(_req: &GetStatusRequest) -> GetStatusResponse {
+    GetStatusResponse {
+		result: vec![StatusResult {
+			version: "2.0.0".to_string(),
+			id: "0x00000000000000000000000000000000000000000000000000000000000000000e670ec64341771606e55d6b4ca35a1a6b75ee3d5145a99d05921026d1527331".to_string(),
+			status: 200,
+			receipts: vec![Receipt {
+				logs: vec![Log {
+					address: "0xa922b54716264130634d6ff183747a8ead91a40b".to_string(),
+					topics: vec!["0x5a2a90727cc9d000dd060b1132a5c977c9702bb3a52afe360c9c22f0e9451a68".to_string()],
+					data: "0xabcd".to_string(),
+				}],
+				status: "0x1".to_string(),
+				block_hash: "0xf19bbafd9fd0124ec110b848e8de4ab4f62bf60c189524e54213285e7f540d4a".to_string(),
+				block_number: "0xabcd".to_string(),
+				gas_used: "0xdef".to_string(),
+				transaction_hash: "0x9b7bb827c2e5e3c1a0a44dc53e573aa0b3af3bd1f9f5ed03071b100bb039eaff".to_string(),
+				chain_id: "1".to_string(),
+			}],
+			resubmissions: vec![Resubmission {
+				status: 200,
+				transaction_hash: "0x9b7bb827c2e5e3c1a0a44dc53e573aa0b3af3bd1f9f5ed03071b100bb039eaf3".to_string(),
+				chain_id: "1".to_string(),
+			}],
+			offchain_failure: vec![OffchainFailure {
+				message: "insufficient fee provided".to_string(),
+			}],
+			onchain_failure: vec![OnchainFailure {
+				transaction_hash: "0x9b7bb827c2e5e3c1a0a44dc53e573aa0b3af3bd1f9f5ed03071b100bb039eaf2".to_string(),
+				chain_id: "1".to_string(),
+				message: "execution reverted: transfer failed".to_string(),
+				data: "0x08c379a000000000000000000000000000000000000000000000000000000000".to_string(),
+			}],
+		}],
+	}
+}
+
+// Build a response for the relayer_sendTransaction endpoint (removed unused builder)
+/// Build a response for the relayer_getQuote endpoint
+fn build_quote_response() -> QuoteResponse {
+    QuoteResponse {
+		quote: QuoteInner {
+			fee: 132,
+			rate: 3702.23,
+			token: TokenInfo {
+				decimals: 6,
+				address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".to_string(),
+				symbol: Some("USDC".to_string()),
+				name: Some("USDC".to_string()),
+			},
+		},
+		relayer_calls: vec![RelayerCall { to: "0x...".to_string(), data: "0x...".to_string() }],
+		fee_collector: "0x55f3a93f544e01ce4378d25e927d7c493b863bd6".to_string(),
+		revert_reason: "0x87f20438000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000840000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000008408c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000002645524332303a207472616e7366657220616d6f756e7420657863656564732062616c616e6365000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000".to_string(),
+	}
 }
 
 impl RpcServer {
-    pub fn new(host: String, port: u16, storage: Storage) -> Result<Self> {
+    pub fn new(host: String, port: u16, storage: Storage, config: Config) -> Result<Self> {
         Ok(Self {
             host,
             port,
             storage,
+            config,
         })
     }
 
     pub async fn start(&self) -> Result<()> {
         let mut io = IoHandler::new();
 
-        // Endpoint 1: Submit a new relayer request
+        // Endpoint 1: relayer_sendTransaction
         let storage1 = self.storage.clone();
-        io.add_method("submit_request", move |params: Params| {
+        let cfg1 = self.config.clone();
+        io.add_method("relayer_sendTransaction", move |params: Params| {
             let storage = storage1.clone();
+            let cfg = cfg1.clone();
 
             async move {
-                let params = params
-                    .parse::<NewRequestInput>()
+                let inputs: Vec<SendTransactionRequest> = params
+                    .parse::<Vec<SendTransactionRequest>>()
                     .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
+                let input = inputs.first().ok_or_else(|| {
+                    jsonrpc_core::Error::invalid_params("missing params: expected one object")
+                })?;
 
-                let request = RelayerRequest {
-                    id: Uuid::new_v4(),
-                    from_address: params.from_address,
-                    to_address: params.to_address,
-                    amount: params.amount,
-                    gas_limit: params.gas_limit,
-                    gas_price: params.gas_price,
-                    data: params.data,
-                    nonce: params.nonce,
-                    chain_id: params.chain_id,
-                    status: RequestStatus::Pending,
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                    error_message: None,
-                };
-
-                storage
-                    .store_request(&request)
-                    .await
-                    .map_err(|_| jsonrpc_core::Error::internal_error())?;
-
-                Ok(Value::String(request.id.to_string()))
+                let response = process_send_transaction(storage, input, &cfg).await?;
+                serde_json::to_value(response).map_err(|_| jsonrpc_core::Error::internal_error())
             }
         });
 
-        // Endpoint 2: Get request status
+        // Endpoint 2: relayer_getStatus
         let storage2 = self.storage.clone();
-        io.add_method("get_request_status", move |params: Params| {
+        let cfg2 = self.config.clone();
+        io.add_method("relayer_getStatus", move |params: Params| {
             let storage = storage2.clone();
+            let cfg = cfg2.clone();
 
             async move {
-                let request_id: String = params
-                    .parse::<String>()
+                let request: GetStatusRequest = params
+                    .parse::<GetStatusRequest>()
                     .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
 
-                let uuid = Uuid::parse_str(&request_id)
-                    .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
-
-                let request = storage
-                    .get_request(uuid)
-                    .await
-                    .map_err(|_| jsonrpc_core::Error::internal_error())?;
-
-                match request {
-                    Some(req) => {
-                        let response = RelayerResponse {
-                            request_id: req.id,
-                            transaction_hash: None, // Would be filled when transaction is processed
-                            block_number: None,
-                            gas_used: None,
-                            status: req.status,
-                            completed_at: None,
-                            error_message: req.error_message,
-                        };
-
-                        Ok(serde_json::to_value(response)
-                            .map_err(|_| jsonrpc_core::Error::internal_error())?)
-                    }
-                    None => Err(jsonrpc_core::Error::invalid_params("Request not found")),
-                }
+                let response = process_get_status(storage, &request, &cfg).await?;
+                serde_json::to_value(response).map_err(|_| jsonrpc_core::Error::internal_error())
             }
         });
 
         // Endpoint 3: Health check
         let storage3 = self.storage.clone();
+        let cfg3 = self.config.clone();
         io.add_method("health_check", move |_params: Params| {
             let storage = storage3.clone();
+            let cfg = cfg3.clone();
 
             async move {
-                let total_requests = storage
-                    .get_total_request_count()
-                    .await
-                    .map_err(|_| jsonrpc_core::Error::internal_error())?;
-
-                let pending_requests = storage
-                    .get_request_count_by_status(RequestStatus::Pending)
-                    .await
-                    .map_err(|_| jsonrpc_core::Error::internal_error())?;
-
-                let completed_requests = storage
-                    .get_request_count_by_status(RequestStatus::Completed)
-                    .await
-                    .map_err(|_| jsonrpc_core::Error::internal_error())?;
-
-                let failed_requests = storage
-                    .get_request_count_by_status(RequestStatus::Failed)
-                    .await
-                    .map_err(|_| jsonrpc_core::Error::internal_error())?;
-
-                let health = HealthResponse {
-                    status: "healthy".to_string(),
-                    timestamp: Utc::now(),
-                    uptime_seconds: storage.get_uptime_seconds(),
-                    total_requests,
-                    pending_requests,
-                    completed_requests,
-                    failed_requests,
-                };
+                let health = process_health_check(storage, &cfg).await?;
 
                 serde_json::to_value(health).map_err(|_| jsonrpc_core::Error::internal_error())
             }
+        });
+
+        // New Endpoint: relayer_getExchangeRate
+        let _cfg4 = self.config.clone();
+        #[cfg(feature = "onchain")]
+        let provider_cache = self.provider_cache.clone();
+        io.add_method(
+            "relayer_getExchangeRate",
+            move |params: Params| async move {
+                let inputs: Vec<ExchangeRateRequest> =
+                    params
+                        .parse::<Vec<ExchangeRateRequest>>()
+                        .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
+                let _input = inputs.first().ok_or_else(|| {
+                    jsonrpc_core::Error::invalid_params("missing params: expected one object")
+                })?;
+
+                #[cfg(feature = "onchain")]
+                let payload = {
+                    let provider =
+                        get_or_create_provider_with_cache(&cfg4, &input.chain_id, &provider_cache)
+                            .await;
+                    let now = Utc::now().timestamp() as u64;
+                    let expiry = now + 600;
+                    build_exchange_rate_response_with_provider(&cfg4, &provider, input, expiry)
+                        .await
+                };
+                #[cfg(not(feature = "onchain"))]
+                let payload = ExchangeRateResponse {
+                    result: vec![ExchangeRateResultItem::Error(
+                        crate::types::ExchangeRateError {
+                            error: crate::types::ExchangeRateErrorBody {
+                                id: "onchain_disabled".into(),
+                                message: "compiled without onchain feature".into(),
+                            },
+                        },
+                    )],
+                };
+                serde_json::to_value(payload).map_err(|_| jsonrpc_core::Error::internal_error())
+            },
+        );
+
+        // New Endpoint: relayer_getQuote
+        io.add_method("relayer_getQuote", |params: Params| async move {
+            let _inputs: Vec<QuoteRequest> = params
+                .parse::<Vec<QuoteRequest>>()
+                .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
+            let payload = build_quote_response();
+            serde_json::to_value(payload).map_err(|_| jsonrpc_core::Error::internal_error())
         });
 
         // Start the HTTP server

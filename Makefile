@@ -77,6 +77,9 @@ lint: # Run `clippy` and `rustfmt`.
 	# udeps
 	cargo +nightly udeps --all-targets
 
+clean-deps:
+	cargo +nightly udeps --all-targets --release
+
 # Show help
 help:
 	@echo "RelayX Service - Available Commands"
