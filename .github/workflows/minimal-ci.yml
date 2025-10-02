@@ -1,10 +1,10 @@
-name: CI
+name: Minimal CI
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: [ main, develop ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,3 +41,17 @@ jobs:
       
       - name: Check cargo sort
         run: cargo sort --check --grouped
+
+  # Optional: Very basic syntax check (no dependencies)
+  syntax:
+    name: Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Check syntax (no dependencies)
+        run: cargo check --no-deps
