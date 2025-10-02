@@ -2,7 +2,7 @@
 /// This demonstrates how to call the new endpoint and parse the response
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::blocking::Client::new();
-    
+
     // JSON-RPC request payload for relayer_getCapabilities
     let request_body = serde_json::json!({
         "jsonrpc": "2.0",

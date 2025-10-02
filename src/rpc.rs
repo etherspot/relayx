@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+
 use anyhow::Result;
 use chrono::Utc;
 use jsonrpc_core::{IoHandler, Params};
@@ -9,12 +10,12 @@ use crate::{
     config::Config,
     storage::Storage,
     types::{
-        Capabilities, Erc20Payment, ExchangeRateRequest, ExchangeRateResponse, ExchangeRateResultItem, 
-        ExchangeRateSuccess, ExchangeRateQuote, GetCapabilitiesResponse, GetStatusRequest, GetStatusResponse, HealthResponse, Log, 
-        NativePayment, OffchainFailure, OnchainFailure, Payment, PaymentType, QuoteInner,
-        QuoteRequest, QuoteResponse, Receipt, RelayerCall, RequestStatus, Resubmission,
-        SendTransactionRequest, SendTransactionResponse, SendTransactionResult, SponsoredPayment,
-        StatusResult, TokenInfo,
+        Capabilities, Erc20Payment, ExchangeRateQuote, ExchangeRateRequest, ExchangeRateResponse,
+        ExchangeRateResultItem, ExchangeRateSuccess, GetCapabilitiesResponse, GetStatusRequest,
+        GetStatusResponse, HealthResponse, Log, NativePayment, OffchainFailure, OnchainFailure,
+        Payment, PaymentType, QuoteInner, QuoteRequest, QuoteResponse, Receipt, RelayerCall,
+        RequestStatus, Resubmission, SendTransactionRequest, SendTransactionResponse,
+        SendTransactionResult, SponsoredPayment, StatusResult, TokenInfo,
     },
 };
 
@@ -95,9 +96,9 @@ async fn process_get_capabilities(
     // Build capabilities based on configuration
     // Extract all supported tokens from the chainlink configuration
     let supported_tokens = cfg.get_supported_tokens();
-    
+
     let mut payments = Vec::new();
-    
+
     // Add ERC20 payment options for each supported token
     for token in supported_tokens {
         payments.push(Payment::Erc20(Erc20Payment {
@@ -105,24 +106,25 @@ async fn process_get_capabilities(
             token,
         }));
     }
-    
+
     // If no tokens found in config, fall back to default token
     if payments.is_empty() {
-        let default_token = cfg.default_token()
+        let default_token = cfg
+            .default_token()
             .unwrap_or_else(|| "0x036CbD53842c5426634e7929541eC2318f3dCF7e".to_string()); // USDC on Ethereum
-        
+
         payments.push(Payment::Erc20(Erc20Payment {
             payment_type: PaymentType::Erc20,
             token: default_token,
         }));
     }
-    
+
     // Always include native payment option
     payments.push(Payment::Native(NativePayment {
         payment_type: PaymentType::Native,
         token: "0x0000000000000000000000000000000000000000".to_string(),
     }));
-    
+
     // Always include sponsored payment option
     payments.push(Payment::Sponsored(SponsoredPayment {
         payment_type: PaymentType::Sponsored,
@@ -170,10 +172,10 @@ async fn build_exchange_rate_response_stub(
 ) -> ExchangeRateResponse {
     let now = Utc::now().timestamp() as u64;
     let expiry = now + 600;
-    
+
     // Zero address denotes native token
     let zero_addr = "0x0000000000000000000000000000000000000000".to_string();
-    
+
     let result_item = if req.token.to_lowercase() == zero_addr {
         // Native token: return a simple rate
         ExchangeRateResultItem::Success(ExchangeRateSuccess {
@@ -381,7 +383,8 @@ impl RpcServer {
 
             async move {
                 let capabilities = process_get_capabilities(storage, &cfg).await?;
-                serde_json::to_value(capabilities).map_err(|_| jsonrpc_core::Error::internal_error())
+                serde_json::to_value(capabilities)
+                    .map_err(|_| jsonrpc_core::Error::internal_error())
             }
         });
 

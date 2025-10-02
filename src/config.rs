@@ -186,7 +186,7 @@ impl Config {
         if let Ok(token) = std::env::var("RELAYX_DEFAULT_TOKEN") {
             return Some(token);
         }
-        
+
         // Then check config file
         let root = self.get_json_config()?;
         root.get("defaultToken")
@@ -203,7 +203,7 @@ impl Config {
         };
 
         let mut tokens = Vec::new();
-        
+
         // Extract tokens from chainlink.tokenUsd configuration
         if let Some(chainlink) = root.get("chainlink") {
             if let Some(token_usd) = chainlink.get("tokenUsd") {
