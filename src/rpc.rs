@@ -1,20 +1,8 @@
 use std::net::SocketAddr;
-#[cfg(feature = "onchain")]
-use std::{collections::HashMap, str::FromStr, sync::Arc};
-
-/// Alloy imports for on-chain calls
-#[cfg(feature = "onchain")]
-use alloy::primitives::{address, Address as AlloyAddress, U256 as AlloyU256};
-#[cfg(feature = "onchain")]
-use alloy::providers::{Provider, ProviderBuilder, RootProvider};
-#[cfg(feature = "onchain")]
-use alloy::sol;
 use anyhow::Result;
 use chrono::Utc;
 use jsonrpc_core::{IoHandler, Params};
 use jsonrpc_http_server::ServerBuilder;
-#[cfg(feature = "onchain")]
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
@@ -22,7 +10,7 @@ use crate::{
     storage::Storage,
     types::{
         Capabilities, Erc20Payment, ExchangeRateRequest, ExchangeRateResponse, ExchangeRateResultItem, 
-        GetCapabilitiesResponse, GetStatusRequest, GetStatusResponse, HealthResponse, Log, 
+        ExchangeRateSuccess, ExchangeRateQuote, GetCapabilitiesResponse, GetStatusRequest, GetStatusResponse, HealthResponse, Log, 
         NativePayment, OffchainFailure, OnchainFailure, Payment, PaymentType, QuoteInner,
         QuoteRequest, QuoteResponse, Receipt, RelayerCall, RequestStatus, Resubmission,
         SendTransactionRequest, SendTransactionResponse, SendTransactionResult, SponsoredPayment,
@@ -35,8 +23,6 @@ pub struct RpcServer {
     port: u16,
     storage: Storage,
     config: Config,
-    #[cfg(feature = "onchain")]
-    provider_cache: Arc<RwLock<HashMap<String, RootProvider>>>,
 }
 
 /// Endpoint business logic functions
@@ -177,230 +163,57 @@ fn build_health_response(
     }
 }
 
-/// Build a response for the relayer_getExchangeRate endpoint
-/// Resolve an RPC URL for a given chainId using global config with env fallbacks
-#[cfg(feature = "onchain")]
-fn resolve_rpc_url(chain_id: &str, cfg: &Config) -> String {
-    cfg.rpc_url_for_chain(chain_id)
-        .or_else(|| std::env::var("ETH_RPC_URL").ok())
-        .or_else(|| std::env::var("RPC_URL").ok())
-        .unwrap_or_else(|| "http://127.0.0.1:8545".to_string())
-}
-
-/// Get a provider for a chainId using only the provided Config (no cache)
-#[cfg(feature = "onchain")]
-#[cfg(feature = "onchain")]
-async fn get_or_create_provider(cfg: &Config, chain_id: &str) -> RootProvider {
-    let rpc_url = resolve_rpc_url(chain_id, cfg);
-    ProviderBuilder::new().on_http(rpc_url.parse().unwrap())
-}
-
-/// Get or insert a cached provider for a chainId using the server's cache
-#[cfg(feature = "onchain")]
-async fn get_or_create_provider_with_cache(
+/// Build a simple stub response for the relayer_getExchangeRate endpoint
+async fn build_exchange_rate_response_stub(
     cfg: &Config,
-    chain_id: &str,
-    cache: &Arc<RwLock<HashMap<String, RootProvider>>>,
-) -> RootProvider {
-    {
-        let read = cache.read().await;
-        if let Some(p) = read.get(chain_id) {
-            return p.clone();
-        }
-    }
-    let rpc_url = resolve_rpc_url(chain_id, cfg);
-    let provider = ProviderBuilder::new().on_http(rpc_url.parse().unwrap());
-    let mut write = cache.write().await;
-    write.insert(chain_id.to_string(), provider.clone());
-    provider
-}
-
-#[cfg(feature = "onchain")]
-fn get_fee_collector(cfg: &Config) -> String {
-    std::env::var("RELAYX_FEE_COLLECTOR")
-        .ok()
-        .or_else(|| cfg.fee_collector())
-        .unwrap_or_else(|| "".to_string())
-}
-
-#[cfg(feature = "onchain")]
-fn resolve_chainlink_feeds(cfg: &Config, chain_id: &str, token: &str) -> Option<(String, String)> {
-    let native = cfg
-        .chainlink_native_usd(chain_id)
-        .or_else(|| std::env::var("CHAINLINK_ETH_USD").ok());
-    let token_feed = cfg
-        .chainlink_token_usd(chain_id, token)
-        .or_else(|| std::env::var("CHAINLINK_TOKEN_USD").ok());
-    match (native, token_feed) {
-        (Some(a), Some(b)) => Some((a, b)),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "onchain")]
-async fn build_exchange_rate_response_with_provider(
-    cfg: &Config,
-    provider: &RootProvider,
     req: &ExchangeRateRequest,
-    expiry: u64,
 ) -> ExchangeRateResponse {
-    // Define Chainlink AggregatorV3 and ERC20 interfaces
-    sol! {
-        interface AggregatorV3Interface {
-            function decimals() external view returns (uint8);
-            function latestRoundData() external view returns (
-                uint80 roundId,
-                int256 answer,
-                uint256 startedAt,
-                uint256 updatedAt,
-                uint80 answeredInRound
-            );
-        }
-
-        interface ERC20 {
-            function decimals() external view returns (uint8);
-            function symbol() external view returns (string);
-            function name() external view returns (string);
-        }
-    }
-
-    // Provider supplied by caller (cached per chain)
-
-    // Get gas price
-    let gas_price_wei: AlloyU256 = match provider.get_gas_price().await {
-        Ok(v) => v,
-        Err(e) => {
-            let err = ExchangeRateResultItem::Error(crate::types::ExchangeRateError {
-                error: crate::types::ExchangeRateErrorBody {
-                    id: "gas_price".to_string(),
-                    message: format!("failed to fetch gas price: {}", e),
-                },
-            });
-            return ExchangeRateResponse { result: vec![err] };
-        }
-    };
-
-    // Hex-encode gas price
-    let gas_price_hex = format!("{:#x}", gas_price_wei);
-
-    // Optional EIP-1559 fields not fetched here
-    let max_fee_per_gas = None;
-    let max_priority_fee_per_gas = None;
-
+    let now = Utc::now().timestamp() as u64;
+    let expiry = now + 600;
+    
     // Zero address denotes native token
     let zero_addr = "0x0000000000000000000000000000000000000000".to_string();
-
-    // Compute rate
+    
     let result_item = if req.token.to_lowercase() == zero_addr {
-        // Native token: rate is gasPrice in native units (ETH for chain 1)
-        let rate_native = {
-            // Convert gas price in wei per gas to ETH per gas
-            let num = gas_price_wei.to::<f64>();
-            num / 1e18f64
-        };
-
+        // Native token: return a simple rate
         ExchangeRateResultItem::Success(ExchangeRateSuccess {
             quote: ExchangeRateQuote {
-                rate: rate_native,
+                rate: 0.001, // 0.001 ETH per gas
                 token: TokenInfo {
                     decimals: 18,
                     address: zero_addr.clone(),
-                    symbol: None,
-                    name: None,
+                    symbol: Some("ETH".to_string()),
+                    name: Some("Ethereum".to_string()),
                 },
             },
-            gas_price: gas_price_hex,
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            fee_collector: get_fee_collector(cfg),
+            gas_price: "0x4a817c800".to_string(), // 20 gwei
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            fee_collector: std::env::var("RELAYX_FEE_COLLECTOR")
+                .ok()
+                .or_else(|| cfg.fee_collector())
+                .unwrap_or_else(|| "0x55f3a93f544e01ce4378d25e927d7c493b863bd6".to_string()),
             expiry,
         })
     } else {
-        // Token: need native/USD and token/USD feeds, resolve via config or env
-        let (eth_usd_addr, token_usd_addr) =
-            match resolve_chainlink_feeds(cfg, &req.chain_id, &req.token) {
-                Some(pair) => pair,
-                None => {
-                    return ExchangeRateResponse {
-                        result: vec![ExchangeRateResultItem::Error(
-                            crate::types::ExchangeRateError {
-                                error: crate::types::ExchangeRateErrorBody {
-                                    id: "config".to_string(),
-                                    message: "missing chainlink feed addresses for native/token"
-                                        .to_string(),
-                                },
-                            },
-                        )],
-                    };
-                }
-            };
-
-        let agg_eth = AggregatorV3Interface::new(AlloyAddress::from_str(&eth_usd_addr).unwrap());
-        let agg_tok = AggregatorV3Interface::new(AlloyAddress::from_str(&token_usd_addr).unwrap());
-
-        // Fetch latest data and decimals
-        let (eth_dec, tok_dec, eth_latest, tok_latest) = match (
-            provider.view_call(agg_eth.decimals()).await,
-            provider.view_call(agg_tok.decimals()).await,
-            provider.view_call(agg_eth.latestRoundData()).await,
-            provider.view_call(agg_tok.latestRoundData()).await,
-        ) {
-            (Ok(eth_dec), Ok(tok_dec), Ok(eth_latest), Ok(tok_latest)) => {
-                (eth_dec._0, tok_dec._0, eth_latest._1, tok_latest._1)
-            }
-            _ => {
-                return ExchangeRateResponse {
-                    result: vec![ExchangeRateResultItem::Error(
-                        crate::types::ExchangeRateError {
-                            error: crate::types::ExchangeRateErrorBody {
-                                id: "chainlink".to_string(),
-                                message: "failed to read chainlink feeds".to_string(),
-                            },
-                        },
-                    )],
-                };
-            }
-        };
-
-        // Convert answers to f64 USD prices
-        let eth_price_usd = (eth_latest as f64) / 10f64.powi(eth_dec as i32);
-        let tok_price_usd = (tok_latest as f64) / 10f64.powi(tok_dec as i32);
-
-        // Token metadata from ERC20
-        let token_addr = AlloyAddress::from_str(&req.token).unwrap_or(address!(0x0));
-        let token = ERC20::new(token_addr);
-        let (token_decimals, token_symbol, token_name) = match (
-            provider.view_call(token.decimals()).await,
-            provider.view_call(token.symbol()).await,
-            provider.view_call(token.name()).await,
-        ) {
-            (Ok(d), Ok(s), Ok(n)) => (d._0, Some(s._0), Some(n._0)),
-            (Ok(d), _, _) => (d._0, None, None),
-            _ => (6u8, None, None),
-        };
-
-        // Compute tokens per gas: (gasPrice[ETH/gas] * ETH_USD) / TOKEN_USD
-        let gas_eth = gas_price_wei.to::<f64>() / 1e18f64;
-        let rate_tokens_per_gas = if tok_price_usd > 0.0 {
-            (gas_eth * eth_price_usd) / tok_price_usd
-        } else {
-            0.0
-        };
-
+        // ERC20 token: return a simple rate
         ExchangeRateResultItem::Success(ExchangeRateSuccess {
             quote: ExchangeRateQuote {
-                rate: rate_tokens_per_gas,
+                rate: 0.0032, // Example rate for USDC
                 token: TokenInfo {
-                    decimals: token_decimals,
+                    decimals: 6,
                     address: req.token.clone(),
-                    symbol: token_symbol,
-                    name: token_name,
+                    symbol: Some("USDC".to_string()),
+                    name: Some("USD Coin".to_string()),
                 },
             },
-            gas_price: gas_price_hex,
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            fee_collector: get_fee_collector(cfg),
+            gas_price: "0x4a817c800".to_string(), // 20 gwei
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            fee_collector: std::env::var("RELAYX_FEE_COLLECTOR")
+                .ok()
+                .or_else(|| cfg.fee_collector())
+                .unwrap_or_else(|| "0x55f3a93f544e01ce4378d25e927d7c493b863bd6".to_string()),
             expiry,
         })
     };
@@ -533,44 +346,22 @@ impl RpcServer {
         });
 
         // New Endpoint: relayer_getExchangeRate
-        let _cfg4 = self.config.clone();
-        #[cfg(feature = "onchain")]
-        let provider_cache = self.provider_cache.clone();
-        io.add_method(
-            "relayer_getExchangeRate",
-            move |params: Params| async move {
+        let cfg4 = self.config.clone();
+        io.add_method("relayer_getExchangeRate", move |params: Params| {
+            let cfg = cfg4.clone();
+            async move {
                 let inputs: Vec<ExchangeRateRequest> =
                     params
                         .parse::<Vec<ExchangeRateRequest>>()
                         .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
-                let _input = inputs.first().ok_or_else(|| {
+                let input = inputs.first().ok_or_else(|| {
                     jsonrpc_core::Error::invalid_params("missing params: expected one object")
                 })?;
 
-                #[cfg(feature = "onchain")]
-                let payload = {
-                    let provider =
-                        get_or_create_provider_with_cache(&cfg4, &input.chain_id, &provider_cache)
-                            .await;
-                    let now = Utc::now().timestamp() as u64;
-                    let expiry = now + 600;
-                    build_exchange_rate_response_with_provider(&cfg4, &provider, input, expiry)
-                        .await
-                };
-                #[cfg(not(feature = "onchain"))]
-                let payload = ExchangeRateResponse {
-                    result: vec![ExchangeRateResultItem::Error(
-                        crate::types::ExchangeRateError {
-                            error: crate::types::ExchangeRateErrorBody {
-                                id: "onchain_disabled".into(),
-                                message: "compiled without onchain feature".into(),
-                            },
-                        },
-                    )],
-                };
+                let payload = build_exchange_rate_response_stub(&cfg, input).await;
                 serde_json::to_value(payload).map_err(|_| jsonrpc_core::Error::internal_error())
-            },
-        );
+            }
+        });
 
         // New Endpoint: relayer_getQuote
         io.add_method("relayer_getQuote", |params: Params| async move {

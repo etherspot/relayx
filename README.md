@@ -2,41 +2,68 @@ A Rust implementation of the [Generic Relayer Architecture for Smart Accounts EI
 
 ## Overview
 
-This relayer service provides a standardized off-chain architecture that allows smart accounts to execute gasless transactions and token-fee payments. The service acts as an intermediary between wallets/dApps and the blockchain, handling transaction submission, gas payment, and status tracking.
+This relayer service provides a standardized off-chain architecture that enables smart accounts to execute gasless transactions and token-fee payments. The service implements a simplified, high-performance JSON-RPC server that focuses on core relayer functionality without blockchain dependencies, making it ideal for testing, development, and integration scenarios.
 
 ### Key Features
 
-- **Gasless Transactions**: Users can pay transaction fees using ERC-20 tokens instead of native tokens
-- **Transaction Relaying**: Submit signed transactions through a relayer instead of directly to the network  
-- **Real-time Exchange Rates**: Get current token-to-gas conversion rates using Chainlink price feeds
-- **Transaction Status Tracking**: Monitor the lifecycle of submitted transactions
-- **Multi-chain Support**: Configurable support for multiple blockchain networks
-- **Capability Discovery**: Automatically discover supported payment methods and tokens
-- **Health Monitoring**: Built-in health check and metrics endpoints
+- **Gasless Transactions**: Support for ERC-20 token-based transaction fee payments
+- **Transaction Relaying**: Submit signed transactions through a standardized relayer interface
+- **Exchange Rate Simulation**: Get token-to-gas conversion rates with stub responses for fast testing
+- **Transaction Status Tracking**: Monitor the lifecycle of submitted transactions with persistent storage
+- **Multi-token Support**: Configurable support for multiple ERC-20 tokens across different networks
+- **Capability Discovery**: Automatically discover supported payment methods and tokens from configuration
+- **Health Monitoring**: Built-in health check and metrics endpoints for monitoring
+- **Simplified Architecture**: No blockchain dependencies for fast, reliable operation
 
 ## Architecture
 
-The service implements a modular JSON-RPC server with the following components:
+The service implements a simplified, high-performance JSON-RPC server with the following components:
 
 ```
-┌─────────────┐    ┌──────────────┐    ┌─────────────────┐    ┌─────────────┐
-│   dApp/     │───▶│    Relayer   │───▶│   Blockchain    │───▶│   Smart     │
-│   Wallet    │    │   RPC Server │    │    Networks     │    │  Accounts   │
-└─────────────┘    └──────────────┘    └─────────────────┘    └─────────────┘
+┌─────────────┐    ┌──────────────┐    ┌─────────────────┐
+│   dApp/     │───▶│    Relayer   │───▶│   Smart         │
+│   Wallet    │    │   RPC Server │    │   Account       │
+│             │    │              │    │   Integration   │
+└─────────────┘    └──────────────┘    └─────────────────┘
                           │
                           ▼
-                   ┌─────────────┐
-                   │  Storage    │
-                   │  (Requests, │
-                   │   Status)   │
-                   └─────────────┘
+                   ┌─────────────────┐
+                   │  Storage Layer  │
+                   │  ┌─────────────┐│
+                   │  │  RocksDB    ││
+                   │  │  (Requests, ││
+                   │  │   Status,   ││
+                   │  │   Metrics)  ││
+                   │  └─────────────┘│
+                   └─────────────────┘
+                          │
+                          ▼
+                   ┌─────────────────┐
+                   │  Configuration  │
+                   │  (JSON Config,  │
+                   │   Environment   │
+                   │   Variables)    │
+                   └─────────────────┘
 ```
+
+### Simplified Design Principles
+
+- **No Blockchain Dependencies**: Eliminates complex blockchain RPC calls and provider management
+- **Fast Response Times**: Stub responses provide immediate feedback without network latency
+- **Reliable Operation**: No external service dependencies for core functionality
+- **Easy Testing**: Predictable responses make integration testing straightforward
+- **Development Friendly**: Ideal for development, testing, and integration scenarios
 
 ## Build and Run
 
 ### Requirements
 - Rust (stable) and Cargo
-- RocksDB system libraries
+- RocksDB system libraries (for persistent storage)
+
+**Simplified Dependencies:**
+- No blockchain RPC libraries required
+- No complex web3 dependencies
+- Minimal system requirements
 
 ### Install system dependencies
 - macOS:
@@ -89,7 +116,7 @@ docker run --rm -p 4937:4937 -e RELAYX_CONFIG=/app/config.json \
 
 **JSON Configuration File:**
 
-The relayer supports comprehensive configuration via JSON file:
+The relayer supports streamlined configuration via JSON file:
 
 ```json
 {
@@ -98,18 +125,7 @@ The relayer supports comprehensive configuration via JSON file:
   "http_cors": "*",
   "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
   "defaultToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-  "rpcs": {
-    "1": "https://ethereum.publicnode.com",
-    "10": "https://mainnet.optimism.io",
-    "56": "https://bsc-dataseed.binance.org",
-    "137": "https://polygon-rpc.com",
-    "42161": "https://arb1.arbitrum.io/rpc",
-    "8453": "https://mainnet.base.org"
-  },
   "chainlink": {
-    "nativeUsd": {
-      "1": "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419"
-    },
     "tokenUsd": {
       "1": {
         "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": "0x8fffffd4afb6115b954bd326cbe7b4ba576818f6",
@@ -124,6 +140,8 @@ The relayer supports comprehensive configuration via JSON file:
   }
 }
 ```
+
+**Note**: The `rpcs` and `chainlink.nativeUsd` configurations are no longer required as the relayer uses stub responses for exchange rates instead of making blockchain calls.
 
 ### Token Discovery
 
@@ -140,12 +158,7 @@ The relayer automatically discovers supported ERC20 tokens from the `chainlink.t
 - `RELAYX_DEFAULT_TOKEN`: Default ERC20 token address for fallback
 - `RELAYX_FEE_COLLECTOR`: Address to receive relayer fees
 
-**RPC Configuration:**
-- `ETH_RPC_URL` / `RPC_URL`: Default RPC endpoint for blockchain access
-
-**Chainlink Configuration:**
-- `CHAINLINK_ETH_USD`: Chainlink ETH/USD price feed address
-- `CHAINLINK_TOKEN_USD`: Chainlink token/USD price feed address
+**Note**: Blockchain RPC and Chainlink feed configurations are no longer required as the relayer uses simplified stub responses for exchange rates and capabilities discovery.
 
 ## Supported JSON-RPC Methods
 
@@ -448,10 +461,6 @@ curl -X POST http://localhost:4937 \
 }
 ```
 
-### Feature Flags
-
-- `onchain` - Enable real blockchain interactions (default: enabled)
-  - When disabled, returns stub responses for testing
 
 ## Development
 
@@ -459,7 +468,7 @@ curl -X POST http://localhost:4937 \
 
 ```
 src/
-├── main.rs              # Application entry point and CLI argument parsing
+git s├── main.rs              # Application entry point and CLI argument parsing
 ├── config.rs            # Configuration management with JSON and environment support
 ├── storage.rs           # RocksDB-based data persistence layer
 ├── types.rs            # JSON-RPC request/response types and data structures
@@ -480,16 +489,16 @@ Cargo.toml              # Rust project dependencies and features
 #### RpcServer
 The main server struct that:
 - Handles JSON-RPC method routing for all endpoints
-- Manages provider connections with caching for blockchain access
-- Processes business logic for each endpoint
+- Processes business logic for each endpoint with stub responses
 - Supports multiple payment methods and token discovery
+- No blockchain dependencies for simplified operation
 
 #### Configuration Management
-Comprehensive configuration system:
+Streamlined configuration system:
 - **CLI Arguments**: Command-line flags with environment variable fallbacks
-- **JSON Configuration**: Structured configuration file support
-- **Token Discovery**: Automatic extraction of supported tokens from Chainlink config
-- **Multi-chain Support**: Configurable RPC endpoints for different blockchain networks
+- **JSON Configuration**: Structured configuration file support for token discovery
+- **Token Discovery**: Automatic extraction of supported tokens from configuration
+- **Simplified Setup**: No blockchain RPC or complex feed configurations required
 
 #### Storage Layer
 RocksDB-based persistent storage for:
@@ -498,12 +507,12 @@ RocksDB-based persistent storage for:
 - System uptime and health monitoring
 - Request lifecycle management
 
-#### Price Feed Integration
-When `onchain` feature is enabled:
-- Fetches real-time gas prices from blockchain networks
-- Queries Chainlink price feeds for accurate token rates
-- Calculates exchange rates: `(gasPrice * ETH_price) / token_price`
-- Supports multiple tokens across different chains
+#### Exchange Rate Management
+Simplified exchange rate handling:
+- Returns predictable stub exchange rates for testing and development
+- Supports both native and ERC20 token rate calculations
+- Configurable fee collector addresses
+- Fast response times without blockchain network dependencies
 
 #### Capability Discovery
 Automatic capability detection:
@@ -585,21 +594,24 @@ curl -X POST http://localhost:4937 \
 
 ### Development Features
 
-**Feature Flags:**
-- `onchain`: Enable real blockchain interactions (default: enabled)
-  - When disabled, returns stub responses for testing without blockchain access
-  - Useful for development and testing environments
+**Simplified Architecture Benefits:**
+- **Fast Build Times**: No heavy blockchain dependencies to compile
+- **Reliable Testing**: Predictable stub responses for consistent testing
+- **Easy Integration**: Simple JSON-RPC interface without blockchain complexity
+- **Quick Setup**: Minimal configuration required to get started
 
 **Configuration Testing:**
 - Use `config.json.default` as a starting point for your configuration
 - Test different token configurations by modifying the `chainlink.tokenUsd` section
 - Verify token discovery by checking the `relayer_getCapabilities` response
+- All endpoints return immediate responses without network delays
 
 **Performance Optimization:**
-- Provider caching reduces blockchain RPC calls
 - Configuration parsing is cached for efficiency
 - No database queries for capabilities endpoint (stateless)
+- No blockchain RPC calls - uses stub responses for fast testing
 - Automatic token deduplication and sorting
+- Minimal memory footprint and fast startup times
 
 ## CI/CD
 - PR CI runs fmt/clippy/sort/udeps/audit
