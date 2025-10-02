@@ -12,7 +12,7 @@ env:
   RUST_LOG: debug
 
 jobs:
-  # Fast checks that can run in parallel
+  # Fast checks that run in parallel
   format:
     name: Format Check
     runs-on: ubuntu-latest
@@ -108,6 +108,12 @@ jobs:
       with:
         components: rustfmt, clippy
     
+    - name: Setup sccache (optional)
+      uses: mozilla-actions/sccache-action@v0.0.4
+      continue-on-error: true
+      with:
+        version: latest
+    
     - name: Cache cargo registry
       uses: actions/cache@v3
       with:
@@ -139,11 +145,28 @@ jobs:
         key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-release-
+    
+    - name: Cache sccache (optional)
+      uses: actions/cache@v3
+      continue-on-error: true
+      with:
+        path: ~/.cache/sccache
+        key: ${{ runner.os }}-sccache-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-sccache-
 
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y librocksdb-dev
+
+    - name: Disable sccache if cache fails
+      run: |
+        if [ "$SCCACHE_GHA_ENABLED" = "true" ]; then
+          echo "SCCACHE_GHA_ENABLED=false" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=" >> $GITHUB_ENV
+        fi
+      continue-on-error: true
 
     - name: Run tests
       run: cargo test --verbose
@@ -151,15 +174,59 @@ jobs:
     - name: Build release
       run: cargo build --release --verbose
 
-    - name: Check for unused dependencies
-      run: |
-        cargo install cargo-udeps --locked
-        cargo udeps
-
     - name: Security audit
       run: |
         cargo install cargo-audit --locked
         cargo audit
+
+  udeps:
+    name: Unused Dependencies
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust nightly
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: rustfmt, clippy
+    
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-nightly-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-registry-nightly-
+          ${{ runner.os }}-cargo-registry-
+    
+    - name: Cache cargo index
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-nightly-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-index-nightly-
+          ${{ runner.os }}-cargo-index-
+    
+    - name: Cache cargo build
+      uses: actions/cache@v3
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-nightly-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-build-nightly-
+          ${{ runner.os }}-cargo-build-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y librocksdb-dev
+
+    - name: Install cargo-udeps
+      run: cargo install cargo-udeps --locked
+
+    - name: Check for unused dependencies
+      run: cargo udeps
 
   clippy-nightly:
     name: Clippy (nightly)

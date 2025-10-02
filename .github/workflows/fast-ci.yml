@@ -7,9 +7,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Enable sccache for faster compilation
-  RUSTC_WRAPPER: sccache
-  SCCACHE_GHA_ENABLED: true
 
 jobs:
   # Ultra-fast checks that run in parallel
@@ -28,8 +25,11 @@ jobs:
       with:
         components: rustfmt, clippy
     
-    - name: Install sccache
+    - name: Setup sccache (optional)
       uses: mozilla-actions/sccache-action@v0.0.4
+      continue-on-error: true
+      with:
+        version: latest
     
     - name: Cache cargo registry
       uses: actions/cache@v3
@@ -55,14 +55,6 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-build-
     
-    - name: Cache sccache
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/sccache
-        key: ${{ runner.os }}-sccache-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-sccache-
-    
     - name: Cache cargo bin
       uses: actions/cache@v3
       with:
@@ -80,6 +72,14 @@ jobs:
         if ! command -v cargo-sort &> /dev/null; then
           cargo install cargo-sort --locked
         fi
+
+    - name: Disable sccache if cache fails
+      run: |
+        if [ "$SCCACHE_GHA_ENABLED" = "true" ]; then
+          echo "SCCACHE_GHA_ENABLED=false" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=" >> $GITHUB_ENV
+        fi
+      continue-on-error: true
 
     - name: Run ${{ matrix.check }}
       run: |
@@ -108,8 +108,11 @@ jobs:
       with:
         components: rustfmt, clippy
     
-    - name: Install sccache
+    - name: Setup sccache (optional)
       uses: mozilla-actions/sccache-action@v0.0.4
+      continue-on-error: true
+      with:
+        version: latest
     
     - name: Cache cargo registry
       uses: actions/cache@v3
@@ -134,25 +137,22 @@ jobs:
         key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-build-
-    
-    - name: Cache sccache
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/sccache
-        key: ${{ runner.os }}-sccache-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-sccache-
 
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y librocksdb-dev
 
+    - name: Disable sccache if cache fails
+      run: |
+        if [ "$SCCACHE_GHA_ENABLED" = "true" ]; then
+          echo "SCCACHE_GHA_ENABLED=false" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=" >> $GITHUB_ENV
+        fi
+      continue-on-error: true
+
     - name: Run tests
       run: cargo test --verbose
 
     - name: Build release
       run: cargo build --release --verbose
-
-    - name: Show sccache stats
-      run: sccache --show-stats
