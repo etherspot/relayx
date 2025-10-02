@@ -68,16 +68,18 @@ watch:
 
 .PHONY: lint
 lint: # Run `clippy` and `rustfmt`.
-	cargo +nightly fmt --all
-	cargo clippy --all --all-targets --features "$(FEATURES)" --no-deps -- --deny warnings
+	cargo fmt --all
+	cargo clippy --all --all-targets --no-deps -- --deny warnings
 
 	# cargo sort
 	cargo sort --grouped 
 
-	# udeps
+	# udeps (requires nightly)
+	rustup component add clippy --toolchain nightly || true
 	cargo +nightly udeps --all-targets
 
 clean-deps:
+	rustup component add clippy --toolchain nightly || true
 	cargo +nightly udeps --all-targets --release
 
 # Show help
