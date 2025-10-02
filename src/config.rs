@@ -178,4 +178,50 @@ impl Config {
             })
             .unwrap_or_else(|| self.http_cors.clone())
     }
+
+    /// Returns the configured default token address if present in the JSON file or environment.
+    /// Supports either top-level `defaultToken` in config.json or `RELAYX_DEFAULT_TOKEN` env var.
+    pub fn default_token(&self) -> Option<String> {
+        // First check environment variable
+        if let Ok(token) = std::env::var("RELAYX_DEFAULT_TOKEN") {
+            return Some(token);
+        }
+
+        // Then check config file
+        let root = self.get_json_config()?;
+        root.get("defaultToken")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// Returns all supported ERC20 token addresses from the chainlink configuration.
+    /// This extracts tokens from the chainlink.tokenUsd configuration across all chains.
+    pub fn get_supported_tokens(&self) -> Vec<String> {
+        let root = match self.get_json_config() {
+            Some(config) => config,
+            None => return Vec::new(),
+        };
+
+        let mut tokens = Vec::new();
+
+        // Extract tokens from chainlink.tokenUsd configuration
+        if let Some(chainlink) = root.get("chainlink") {
+            if let Some(token_usd) = chainlink.get("tokenUsd") {
+                if let Some(token_map) = token_usd.as_object() {
+                    for (_chain_id, chain_tokens) in token_map {
+                        if let Some(chain_tokens_obj) = chain_tokens.as_object() {
+                            for (token_address, _feed_address) in chain_tokens_obj {
+                                tokens.push(token_address.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove duplicates and sort for consistency
+        tokens.sort();
+        tokens.dedup();
+        tokens
+    }
 }

@@ -3,14 +3,23 @@
 # -------- Builder stage --------
 FROM rust:1.83-bookworm AS builder
 
-# Install native deps for rocksdb and TLS
+# Install native deps for rocksdb, TLS, and sccache
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends \
       build-essential clang pkg-config cmake libclang-dev \
       libssl-dev \
+      librocksdb-dev \
  && rm -rf /var/lib/apt/lists/*
 
+# Install sccache for faster compilation
+RUN cargo install sccache
+
 WORKDIR /app
+
+# Enable sccache
+ENV RUSTC_WRAPPER=sccache
+ENV SCCACHE_DIR=/sccache
+ENV SCCACHE_GHA_ENABLED=true
 
 # Leverage Docker layer caching for dependencies
 # 1) Copy manifests first
@@ -21,25 +30,18 @@ RUN mkdir -p src \
  && mkdir -p src/bin \
  && echo "fn main() {}" > src/bin/dummy.rs
 
-# 3) Prebuild dependencies (no default features or with optional onchain)
-ARG FEATURES=""
+# 3) Prebuild dependencies with sccache
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    if [ -n "$FEATURES" ]; then \
-      cargo build --release --features "$FEATURES"; \
-    else \
-      cargo build --release; \
-    fi
+    --mount=type=cache,target=/sccache \
+    cargo build --release
 
 # 4) Now copy the full source and build the actual binary
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    if [ -n "$FEATURES" ]; then \
-      cargo build --release --features "$FEATURES"; \
-    else \
-      cargo build --release; \
-    fi
+    --mount=type=cache,target=/sccache \
+    cargo build --release
 
 # -------- Runtime stage --------
 FROM debian:bookworm-slim AS runtime
@@ -70,6 +72,5 @@ EXPOSE 4937
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1:${HTTP_PORT}/ || exit 1
 
 # Entrypoint uses CLI flags that mirror envs; config path via RELAYX_CONFIG
-# Example to enable on-chain: build with --build-arg FEATURES=onchain
 ENTRYPOINT ["/usr/local/bin/relayx"]
 CMD ["--http-address", "${HTTP_ADDRESS}", "--http-port", "${HTTP_PORT}", "--http-cors", "${HTTP_CORS}"]
