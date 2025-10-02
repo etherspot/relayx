@@ -21,11 +21,12 @@ use crate::{
     config::Config,
     storage::Storage,
     types::{
-        ExchangeRateRequest, ExchangeRateResponse, ExchangeRateResultItem, GetStatusRequest,
-        GetStatusResponse, HealthResponse, Log, OffchainFailure, OnchainFailure, QuoteInner,
+        Capabilities, Erc20Payment, ExchangeRateRequest, ExchangeRateResponse, ExchangeRateResultItem, 
+        GetCapabilitiesResponse, GetStatusRequest, GetStatusResponse, HealthResponse, Log, 
+        NativePayment, OffchainFailure, OnchainFailure, Payment, PaymentType, QuoteInner,
         QuoteRequest, QuoteResponse, Receipt, RelayerCall, RequestStatus, Resubmission,
-        SendTransactionRequest, SendTransactionResponse, SendTransactionResult, StatusResult,
-        TokenInfo,
+        SendTransactionRequest, SendTransactionResponse, SendTransactionResult, SponsoredPayment,
+        StatusResult, TokenInfo,
     },
 };
 
@@ -99,6 +100,51 @@ async fn process_health_check(
         completed_requests,
         failed_requests,
     ))
+}
+
+async fn process_get_capabilities(
+    _storage: Storage,
+    cfg: &Config,
+) -> Result<GetCapabilitiesResponse, jsonrpc_core::Error> {
+    // Build capabilities based on configuration
+    // Extract all supported tokens from the chainlink configuration
+    let supported_tokens = cfg.get_supported_tokens();
+    
+    let mut payments = Vec::new();
+    
+    // Add ERC20 payment options for each supported token
+    for token in supported_tokens {
+        payments.push(Payment::Erc20(Erc20Payment {
+            payment_type: PaymentType::Erc20,
+            token,
+        }));
+    }
+    
+    // If no tokens found in config, fall back to default token
+    if payments.is_empty() {
+        let default_token = cfg.default_token()
+            .unwrap_or_else(|| "0x036CbD53842c5426634e7929541eC2318f3dCF7e".to_string()); // USDC on Ethereum
+        
+        payments.push(Payment::Erc20(Erc20Payment {
+            payment_type: PaymentType::Erc20,
+            token: default_token,
+        }));
+    }
+    
+    // Always include native payment option
+    payments.push(Payment::Native(NativePayment {
+        payment_type: PaymentType::Native,
+        token: "0x0000000000000000000000000000000000000000".to_string(),
+    }));
+    
+    // Always include sponsored payment option
+    payments.push(Payment::Sponsored(SponsoredPayment {
+        payment_type: PaymentType::Sponsored,
+    }));
+
+    let capabilities = Capabilities { payment: payments };
+
+    Ok(GetCapabilitiesResponse { capabilities })
 }
 
 // (unused) Kept for potential reuse; prefer cached path used in start()
@@ -533,6 +579,19 @@ impl RpcServer {
                 .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
             let payload = build_quote_response();
             serde_json::to_value(payload).map_err(|_| jsonrpc_core::Error::internal_error())
+        });
+
+        // New Endpoint: relayer_getCapabilities
+        let storage5 = self.storage.clone();
+        let cfg5 = self.config.clone();
+        io.add_method("relayer_getCapabilities", move |_params: Params| {
+            let storage = storage5.clone();
+            let cfg = cfg5.clone();
+
+            async move {
+                let capabilities = process_get_capabilities(storage, &cfg).await?;
+                serde_json::to_value(capabilities).map_err(|_| jsonrpc_core::Error::internal_error())
+            }
         });
 
         // Start the HTTP server

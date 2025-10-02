@@ -11,6 +11,7 @@ This relayer service provides a standardized off-chain architecture that allows 
 - **Real-time Exchange Rates**: Get current token-to-gas conversion rates using Chainlink price feeds
 - **Transaction Status Tracking**: Monitor the lifecycle of submitted transactions
 - **Multi-chain Support**: Configurable support for multiple blockchain networks
+- **Capability Discovery**: Automatically discover supported payment methods and tokens
 - **Health Monitoring**: Built-in health check and metrics endpoints
 
 ## Architecture
@@ -76,58 +77,167 @@ docker run --rm -p 4937:4937 -e RELAYX_CONFIG=/app/config.json \
 ```
 
 ## Configuration
-CLI flags (env in parentheses) and defaults:
-- --http-address (HTTP_ADDRESS): 127.0.0.1
-- --http-port (HTTP_PORT): 4937
-- --http-cors (HTTP_CORS): "*"
-- --db-path: ./relayx_db
-- --config (RELAYX_CONFIG): optional JSON with:
-  - `http_address`, `http_port`, `http_cors`
-  - `feeCollector`: address string
-  - `rpcs`: { "1": "https://...", "137": "https://..." }
-  - `chainlink.nativeUsd`: { chainId: feedAddress }
-  - `chainlink.tokenUsd`: { chainId: { tokenAddressLowercased: feedAddress } }
+
+### CLI Flags and Environment Variables
+
+**Basic Configuration:**
+- `--http-address` (`HTTP_ADDRESS`): Server bind address (default: 127.0.0.1)
+- `--http-port` (`HTTP_PORT`): Server port (default: 4937)
+- `--http-cors` (`HTTP_CORS`): CORS origins (default: "*")
+- `--db-path`: RocksDB storage path (default: ./relayx_db)
+- `--config` (`RELAYX_CONFIG`): Path to JSON configuration file
+
+**JSON Configuration File:**
+
+The relayer supports comprehensive configuration via JSON file:
+
+```json
+{
+  "http_address": "127.0.0.1",
+  "http_port": 4937,
+  "http_cors": "*",
+  "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
+  "defaultToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "rpcs": {
+    "1": "https://ethereum.publicnode.com",
+    "10": "https://mainnet.optimism.io",
+    "56": "https://bsc-dataseed.binance.org",
+    "137": "https://polygon-rpc.com",
+    "42161": "https://arb1.arbitrum.io/rpc",
+    "8453": "https://mainnet.base.org"
+  },
+  "chainlink": {
+    "nativeUsd": {
+      "1": "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419"
+    },
+    "tokenUsd": {
+      "1": {
+        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": "0x8fffffd4afb6115b954bd326cbe7b4ba576818f6",
+        "0x036CbD53842c5426634e7929541eC2318f3dCF7e": "0x8fffffd4afb6115b954bd326cbe7b4ba576818f6",
+        "0xdAC17F958D2ee523a2206206994597C13D831ec7": "0x3E7d1eAB13ad8aB6F6c6b9b8B7c6e8f7a9c8b7a6"
+      },
+      "137": {
+        "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174": "0xAB594600376Ec9fD91F8e885dADF0CE036862dE0",
+        "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063": "0xAB594600376Ec9fD91F8e885dADF0CE036862dE0"
+      }
+    }
+  }
+}
+```
+
+### Token Discovery
+
+The relayer automatically discovers supported ERC20 tokens from the `chainlink.tokenUsd` configuration:
+
+- **Multi-chain Support**: Tokens are extracted from all configured chains
+- **Automatic Deduplication**: Duplicate tokens across chains are automatically removed
+- **Sorted Results**: Tokens are returned in sorted order for consistency
+- **Fallback Support**: If no tokens are configured, falls back to `defaultToken` or environment variable
+
+### Environment Variables
+
+**Token Configuration:**
+- `RELAYX_DEFAULT_TOKEN`: Default ERC20 token address for fallback
+- `RELAYX_FEE_COLLECTOR`: Address to receive relayer fees
+
+**RPC Configuration:**
+- `ETH_RPC_URL` / `RPC_URL`: Default RPC endpoint for blockchain access
+
+**Chainlink Configuration:**
+- `CHAINLINK_ETH_USD`: Chainlink ETH/USD price feed address
+- `CHAINLINK_TOKEN_USD`: Chainlink token/USD price feed address
 
 ## Supported JSON-RPC Methods
 
 ### Core Relayer Methods
 
-1. **`relayer_getExchangeRate`** - Get token exchange rates for gas payment
-2. **`relayer_getQuote`** - Simulate transactions and get gas estimates  
-3. **`relayer_sendTransaction`** - Submit signed transactions for relay
-4. **`relayer_getStatus`** - Check status of submitted transactions
-5. **`health_check`** - Service health and metrics
+1. **`relayer_getCapabilities`** - Discover supported payment methods and tokens
+2. **`relayer_getExchangeRate`** - Get token exchange rates for gas payment
+3. **`relayer_getQuote`** - Simulate transactions and get gas estimates  
+4. **`relayer_sendTransaction`** - Submit signed transactions for relay
+5. **`relayer_getStatus`** - Check status of submitted transactions
+6. **`health_check`** - Service health and metrics
 
 ## Usage Examples
 
-### Get Exchange Rate
+### 1. Get Relayer Capabilities
 
-Request the current rate for paying gas fees with USDC:
+Discover all supported payment methods and tokens:
 
+**Request:**
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:4937 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "relayer_getCapabilities",
+    "params": [],
+    "id": 1
+  }'
+```
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "capabilities": {
+      "payment": [
+        {
+          "type": "erc20",
+          "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        },
+        {
+          "type": "erc20", 
+          "token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+        },
+        {
+          "type": "erc20",
+          "token": "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+        },
+        {
+          "type": "native",
+          "token": "0x0000000000000000000000000000000000000000"
+        },
+        {
+          "type": "sponsored"
+        }
+      ]
+    }
+  },
+  "id": 1
+}
+```
+
+### 2. Get Exchange Rate
+
+Get current token-to-gas conversion rates:
+
+**Request:**
+```bash
+curl -X POST http://localhost:4937 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
     "method": "relayer_getExchangeRate", 
     "params": [{
       "chainId": "1",
-      "token": "0xA0b86a33E6441e6ae7Db1Ce1E5fD4A2Df00b8BB0"
+      "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
     }],
-    "id": 1
+    "id": 2
   }'
 ```
 
-Response:
+**Response:**
 ```json
 {
   "jsonrpc": "2.0",
   "result": [{
     "quote": {
-      "rate": 30.5,
+      "rate": 0.0032,
       "token": {
         "decimals": 6,
-        "address": "0xA0b86a33E6441e6ae7Db1Ce1E5fD4A2Df00b8BB0",
+        "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
         "symbol": "USDC",
         "name": "USD Coin"
       }
@@ -136,16 +246,17 @@ Response:
     "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
     "expiry": 1755917874
   }],
-  "id": 1
+  "id": 2
 }
 ```
 
-### Get Transaction Quote
+### 3. Get Transaction Quote
 
 Simulate a transaction to get gas estimates and required fees:
 
+**Request:**
 ```bash
-curl -X POST http://localhost:8545 \
+curl -X POST http://localhost:4937 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -157,32 +268,7 @@ curl -X POST http://localhost:8545 \
       "capabilities": {
         "payment": {
           "type": "erc20",
-          "token": "0xA0b86a33E6441e6ae7Db1Ce1E5fD4A2Df00b8BB0"
-        }
-      }
-    }],
-    "id": 2
-  }'
-```
-
-### Submit Transaction
-
-Submit a signed transaction for relay:
-
-```bash
-curl -X POST http://localhost:8545 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0", 
-    "method": "relayer_sendTransaction",
-    "params": [{
-      "to": "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6",
-      "data": "0x...", 
-      "chainId": "1",
-      "capabilities": {
-        "payment": {
-          "type": "erc20", 
-          "token": "0xA0b86a33E6441e6ae7Db1Ce1E5fD4A2Df00b8BB0"
+          "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
         }
       }
     }],
@@ -190,12 +276,82 @@ curl -X POST http://localhost:8545 \
   }'
 ```
 
-### Check Transaction Status
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "quote": {
+      "fee": 21000,
+      "rate": 0.0032,
+      "token": {
+        "decimals": 6,
+        "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "symbol": "USDC",
+        "name": "USD Coin"
+      }
+    },
+    "relayerCalls": [
+      {
+        "to": "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6",
+        "data": "0xa9059cbb000000000000000000000000742d35cc6c3c3f4b4c1b3cd6c0d1b6c2b3d4e5f60000000000000000000000000000000000000000000000000de0b6b3a7640000"
+      }
+    ],
+    "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
+    "revertReason": "0x"
+  },
+  "id": 3
+}
+```
 
-Query the status of a submitted transaction:
+### 4. Submit Transaction
 
-```bash  
-curl -X POST http://localhost:8545 \
+Submit a signed transaction for relay:
+
+**Request:**
+```bash
+curl -X POST http://localhost:4937 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0", 
+    "method": "relayer_sendTransaction",
+    "params": [{
+      "to": "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6",
+      "data": "0xa9059cbb000000000000000000000000742d35cc6c3c3f4b4c1b3cd6c0d1b6c2b3d4e5f60000000000000000000000000000000000000000000000000de0b6b3a7640000",
+      "chainId": "1",
+      "authorizationList": "0x",
+      "capabilities": {
+        "payment": {
+          "type": "erc20", 
+          "token": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        }
+      }
+    }],
+    "id": 4
+  }'
+```
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": [
+    {
+      "chainId": "1",
+      "id": "0x00000000000000000000000000000000000000000000000000000000000000000e670ec64341771606e55d6b4ca35a1a6b75ee3d5145a99d05921026d1527331"
+    }
+  ],
+  "id": 4
+}
+```
+
+### 5. Check Transaction Status
+
+Query the status of submitted transactions:
+
+**Request:**
+```bash
+curl -X POST http://localhost:4937 \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -203,20 +359,94 @@ curl -X POST http://localhost:8545 \
     "params": {
       "ids": ["0x00000000000000000000000000000000000000000000000000000000000000000e670ec64341771606e55d6b4ca35a1a6b75ee3d5145a99d05921026d1527331"]
     },
-    "id": 4
+    "id": 5
   }'
 ```
 
-## Configuration
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": [
+    {
+      "version": "2.0.0",
+      "id": "0x00000000000000000000000000000000000000000000000000000000000000000e670ec64341771606e55d6b4ca35a1a6b75ee3d5145a99d05921026d1527331",
+      "status": 200,
+      "receipts": [
+        {
+          "logs": [
+            {
+              "address": "0xa922b54716264130634d6ff183747a8ead91a40b",
+              "topics": ["0x5a2a90727cc9d000dd060b1132a5c977c9702bb3a52afe360c9c22f0e9451a68"],
+              "data": "0xabcd"
+            }
+          ],
+          "status": "0x1",
+          "blockHash": "0xf19bbafd9fd0124ec110b848e8de4ab4f62bf60c189524e54213285e7f540d4a",
+          "blockNumber": "0xabcd",
+          "gasUsed": "0xdef",
+          "transactionHash": "0x9b7bb827c2e5e3c1a0a44dc53e573aa0b3af3bd1f9f5ed03071b100bb039eaff",
+          "chainId": "1"
+        }
+      ],
+      "resubmissions": [
+        {
+          "status": 200,
+          "transactionHash": "0x9b7bb827c2e5e3c1a0a44dc53e573aa0b3af3bd1f9f5ed03071b100bb039eaf3",
+          "chainId": "1"
+        }
+      ],
+      "offchainFailure": [
+        {
+          "message": "insufficient fee provided"
+        }
+      ],
+      "onchainFailure": [
+        {
+          "transactionHash": "0x9b7bb827c2e5e3c1a0a44dc53e573aa0b3af3bd1f9f5ed03071b100bb039eaf2",
+          "chainId": "1",
+          "message": "execution reverted: transfer failed",
+          "data": "0x08c379a000000000000000000000000000000000000000000000000000000000"
+        }
+      ]
+    }
+  ],
+  "id": 5
+}
+```
 
-### Environment Variables
+### 6. Health Check
 
-Key environment variables for configuration:
+Monitor service health and metrics:
 
-- `ETH_RPC_URL` / `RPC_URL` - Default RPC endpoint  
-- `RELAYX_FEE_COLLECTOR` - Address to receive relayer fees
-- `CHAINLINK_ETH_USD` - Chainlink ETH/USD price feed address
-- `CHAINLINK_TOKEN_USD` - Chainlink token/USD price feed address
+**Request:**
+```bash
+curl -X POST http://localhost:4937 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "health_check",
+    "params": [],
+    "id": 6
+  }'
+```
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "status": "healthy",
+    "timestamp": "2025-01-27T10:30:00Z",
+    "uptime_seconds": 86400,
+    "total_requests": 1250,
+    "pending_requests": 5,
+    "completed_requests": 1200,
+    "failed_requests": 45
+  },
+  "id": 6
+}
+```
 
 ### Feature Flags
 
@@ -229,37 +459,147 @@ Key environment variables for configuration:
 
 ```
 src/
-├── main.rs              # Application entry point
-├── config.rs            # Configuration management  
-├── storage.rs           # Data persistence layer
-├── types.rs            # JSON-RPC request/response types
-└── rpc_server.rs       # Main RPC server implementation
+├── main.rs              # Application entry point and CLI argument parsing
+├── config.rs            # Configuration management with JSON and environment support
+├── storage.rs           # RocksDB-based data persistence layer
+├── types.rs            # JSON-RPC request/response types and data structures
+├── rpc.rs              # Main RPC server implementation with endpoint handlers
+└── lib.rs              # Library exports and module definitions
+
+examples/
+├── test_client.rs       # Example client for testing basic functionality
+└── test_capabilities.rs # Example client for testing capabilities endpoint
+
+config.json.default      # Default configuration template
+Dockerfile              # Docker container configuration
+Cargo.toml              # Rust project dependencies and features
 ```
 
 ### Key Components
 
 #### RpcServer
 The main server struct that:
-- Handles JSON-RPC method routing
-- Manages provider connections with caching
+- Handles JSON-RPC method routing for all endpoints
+- Manages provider connections with caching for blockchain access
 - Processes business logic for each endpoint
+- Supports multiple payment methods and token discovery
+
+#### Configuration Management
+Comprehensive configuration system:
+- **CLI Arguments**: Command-line flags with environment variable fallbacks
+- **JSON Configuration**: Structured configuration file support
+- **Token Discovery**: Automatic extraction of supported tokens from Chainlink config
+- **Multi-chain Support**: Configurable RPC endpoints for different blockchain networks
 
 #### Storage Layer
-Persistent storage for:
-- Transaction requests and status
-- Request metrics and counts  
-- System uptime tracking
+RocksDB-based persistent storage for:
+- Transaction requests and status tracking
+- Request metrics and performance counts  
+- System uptime and health monitoring
+- Request lifecycle management
 
 #### Price Feed Integration
 When `onchain` feature is enabled:
-- Fetches real-time gas prices from blockchain
-- Queries Chainlink price feeds for token rates
+- Fetches real-time gas prices from blockchain networks
+- Queries Chainlink price feeds for accurate token rates
 - Calculates exchange rates: `(gasPrice * ETH_price) / token_price`
+- Supports multiple tokens across different chains
+
+#### Capability Discovery
+Automatic capability detection:
+- **Token Discovery**: Extracts supported ERC20 tokens from configuration
+- **Payment Methods**: Supports native, ERC20, and sponsored payments
+- **Multi-chain Tokens**: Aggregates tokens across all configured chains
+- **Fallback Support**: Graceful degradation when configuration is incomplete
 
 ## Development
-- lint: `make lint` (fmt, clippy, cargo-sort, udeps, audit)
-- build: `make build`
-- run example client: see `examples/test_client.rs`
+
+### Building and Testing
+
+**Build Commands:**
+```bash
+# Check code without building
+cargo check
+
+# Build in debug mode
+cargo build
+
+# Build optimized release
+cargo build --release
+
+# Run linting
+make lint  # (fmt, clippy, cargo-sort, udeps, audit)
+```
+
+**Running the Server:**
+```bash
+# Start the relayer server
+cargo run --release
+
+# Start with custom configuration
+cargo run --release -- --config config.json.default
+
+# Start with environment variables
+RELAYX_CONFIG=config.json.default cargo run --release
+```
+
+### Testing Examples
+
+**Basic Functionality Test:**
+```bash
+# Run the basic test client
+cargo run --example test_client
+```
+
+**Capabilities Endpoint Test:**
+```bash
+# Run the capabilities test client
+cargo run --example test_capabilities
+```
+
+**Manual Testing with curl:**
+
+Test the capabilities endpoint:
+```bash
+curl -X POST http://localhost:4937 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "relayer_getCapabilities",
+    "params": [],
+    "id": 1
+  }'
+```
+
+Test the health check:
+```bash
+curl -X POST http://localhost:4937 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "health_check",
+    "params": [],
+    "id": 1
+  }'
+```
+
+### Development Features
+
+**Feature Flags:**
+- `onchain`: Enable real blockchain interactions (default: enabled)
+  - When disabled, returns stub responses for testing without blockchain access
+  - Useful for development and testing environments
+
+**Configuration Testing:**
+- Use `config.json.default` as a starting point for your configuration
+- Test different token configurations by modifying the `chainlink.tokenUsd` section
+- Verify token discovery by checking the `relayer_getCapabilities` response
+
+**Performance Optimization:**
+- Provider caching reduces blockchain RPC calls
+- Configuration parsing is cached for efficiency
+- No database queries for capabilities endpoint (stateless)
+- Automatic token deduplication and sorting
 
 ## CI/CD
 - PR CI runs fmt/clippy/sort/udeps/audit

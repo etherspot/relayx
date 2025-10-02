@@ -292,3 +292,52 @@ pub struct QuoteResponse {
     #[serde(rename = "revertReason")]
     pub revert_reason: String,
 }
+
+// ===== relayer_getCapabilities =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum PaymentType {
+    Native,
+    #[serde(rename = "erc20")]
+    Erc20,
+    Sponsored,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativePayment {
+    #[serde(rename = "type")]
+    pub payment_type: PaymentType,
+    pub token: String, // "0x0000000000000000000000000000000000000000"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Erc20Payment {
+    #[serde(rename = "type")]
+    pub payment_type: PaymentType,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SponsoredPayment {
+    #[serde(rename = "type")]
+    pub payment_type: PaymentType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Payment {
+    Native(NativePayment),
+    Erc20(Erc20Payment),
+    Sponsored(SponsoredPayment),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Capabilities {
+    pub payment: Vec<Payment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetCapabilitiesResponse {
+    pub capabilities: Capabilities,
+}
