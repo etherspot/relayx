@@ -8,11 +8,97 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUST_LOG: debug
 
 jobs:
-  test:
-    name: Test
+  # Fast checks that can run in parallel
+  format:
+    name: Format Check
     runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt
+    
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+    
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-registry-
+    
+    - name: Cache cargo index
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-index-
+    
+    - name: Cache cargo build
+      uses: actions/cache@v3
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-build-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y librocksdb-dev
+
+    - name: Run clippy
+      run: cargo clippy --all --all-targets --no-deps -- --deny warnings
+
+  cargo-sort:
+    name: Cargo Sort
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Cache cargo bin
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/bin
+        key: ${{ runner.os }}-cargo-bin-cargo-sort
+    
+    - name: Install cargo-sort
+      run: |
+        if ! command -v cargo-sort &> /dev/null; then
+          cargo install cargo-sort --locked
+        fi
+    
+    - name: Sort dependencies
+      run: cargo-sort --check
+
+  # Main test job with optimized caching
+  test:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    needs: [format, clippy, cargo-sort]
     
     steps:
     - uses: actions/checkout@v4
@@ -27,44 +113,53 @@ jobs:
       with:
         path: ~/.cargo/registry
         key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-registry-
     
     - name: Cache cargo index
       uses: actions/cache@v3
       with:
         path: ~/.cargo/git
         key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-index-
     
-    - name: Cache cargo build
+    - name: Cache cargo build (debug)
       uses: actions/cache@v3
       with:
         path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-build-
+    
+    - name: Cache cargo build (release)
+      uses: actions/cache@v3
+      with:
+        path: target/release
+        key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-release-
 
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y librocksdb-dev
 
-    - name: Check formatting
-      run: cargo fmt --all -- --check
-
-    - name: Run clippy
-      run: cargo clippy --all --all-targets --no-deps -- --deny warnings
-
-    - name: Sort dependencies
-      run: cargo sort --check
-
-    - name: Check for unused dependencies
-      run: cargo udeps
-
-    - name: Security audit
-      run: cargo audit
-
     - name: Run tests
       run: cargo test --verbose
 
     - name: Build release
       run: cargo build --release --verbose
+
+    - name: Check for unused dependencies
+      run: |
+        cargo install cargo-udeps --locked
+        cargo udeps
+
+    - name: Security audit
+      run: |
+        cargo install cargo-audit --locked
+        cargo audit
 
   clippy-nightly:
     name: Clippy (nightly)
@@ -83,18 +178,27 @@ jobs:
       with:
         path: ~/.cargo/registry
         key: ${{ runner.os }}-cargo-registry-nightly-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-registry-nightly-
+          ${{ runner.os }}-cargo-registry-
     
     - name: Cache cargo index
       uses: actions/cache@v3
       with:
         path: ~/.cargo/git
         key: ${{ runner.os }}-cargo-index-nightly-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-index-nightly-
+          ${{ runner.os }}-cargo-index-
     
     - name: Cache cargo build
       uses: actions/cache@v3
       with:
         path: target
-        key: ${{ runner.os }}-cargo-build-target-nightly-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-build-nightly-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-build-nightly-
+          ${{ runner.os }}-cargo-build-
 
     - name: Install system dependencies
       run: |
@@ -123,3 +227,4 @@ jobs:
         tags: relayx:latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
