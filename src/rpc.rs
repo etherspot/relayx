@@ -14,8 +14,8 @@ use crate::{
         ExchangeRateResultItem, ExchangeRateSuccess, GetCapabilitiesResponse, GetStatusRequest,
         GetStatusResponse, HealthResponse, Log, NativePayment, OffchainFailure, OnchainFailure,
         Payment, PaymentType, QuoteInner, QuoteRequest, QuoteResponse, Receipt, RelayerCall,
-        RelayerRequest, RequestStatus, Resubmission, SendTransactionRequest, SendTransactionResponse,
-        SendTransactionResult, SponsoredPayment, StatusResult, TokenInfo,
+        RelayerRequest, RequestStatus, Resubmission, SendTransactionRequest,
+        SendTransactionResponse, SendTransactionResult, SponsoredPayment, StatusResult, TokenInfo,
     },
 };
 
@@ -34,15 +34,21 @@ async fn process_send_transaction(
 ) -> Result<SendTransactionResponse, jsonrpc_core::Error> {
     // Validate the transaction request
     if input.to.is_empty() {
-        return Err(jsonrpc_core::Error::invalid_params("Missing required field: 'to'"));
+        return Err(jsonrpc_core::Error::invalid_params(
+            "Missing required field: 'to'",
+        ));
     }
 
     if input.data.is_empty() {
-        return Err(jsonrpc_core::Error::invalid_params("Missing required field: 'data'"));
+        return Err(jsonrpc_core::Error::invalid_params(
+            "Missing required field: 'data'",
+        ));
     }
 
     if input.chain_id.is_empty() {
-        return Err(jsonrpc_core::Error::invalid_params("Missing required field: 'chainId'"));
+        return Err(jsonrpc_core::Error::invalid_params(
+            "Missing required field: 'chainId'",
+        ));
     }
 
     // Validate chain ID is a valid number
@@ -52,9 +58,10 @@ async fn process_send_transaction(
 
     // Check if chain is supported by the relayer
     if !cfg.is_chain_supported(chain_id) {
-        return Err(jsonrpc_core::Error::invalid_params(
-            format!("Unsupported chain ID: {}", chain_id)
-        ));
+        return Err(jsonrpc_core::Error::invalid_params(format!(
+            "Unsupported chain ID: {}",
+            chain_id
+        )));
     }
 
     // Validate payment capability
@@ -63,16 +70,17 @@ async fn process_send_transaction(
             // Validate native payment token address (should be zero address)
             if input.capabilities.payment.token != "0x0000000000000000000000000000000000000000" {
                 return Err(jsonrpc_core::Error::invalid_params(
-                    "Invalid native payment token address"
+                    "Invalid native payment token address",
                 ));
             }
         }
         "erc20" => {
             // Validate ERC20 token address format
-            if !input.capabilities.payment.token.starts_with("0x") || 
-               input.capabilities.payment.token.len() != 42 {
+            if !input.capabilities.payment.token.starts_with("0x")
+                || input.capabilities.payment.token.len() != 42
+            {
                 return Err(jsonrpc_core::Error::invalid_params(
-                    "Invalid ERC20 token address format"
+                    "Invalid ERC20 token address format",
                 ));
             }
         }
@@ -80,22 +88,23 @@ async fn process_send_transaction(
             // Sponsored transactions don't require additional validation
         }
         _ => {
-            return Err(jsonrpc_core::Error::invalid_params(
-                format!("Unsupported payment type: {}", input.capabilities.payment.payment_type)
-            ));
+            return Err(jsonrpc_core::Error::invalid_params(format!(
+                "Unsupported payment type: {}",
+                input.capabilities.payment.payment_type
+            )));
         }
     }
 
     // Generate a unique transaction ID
     let transaction_id = Uuid::new_v4().to_string();
-    
+
     // Create a relayer request record
     let relayer_request = RelayerRequest {
         id: Uuid::parse_str(&transaction_id).unwrap(),
-        from_address: "0x0000000000000000000000000000000000000000".to_string(), // Will be filled from signature
+        from_address: "0x0000000000000000000000000000000000000000".to_string(), /* Will be filled from signature */
         to_address: input.to.clone(),
         amount: "0".to_string(), // Will be calculated based on transaction
-        gas_limit: 21000, // Default gas limit, will be estimated
+        gas_limit: 21000,        // Default gas limit, will be estimated
         gas_price: "0x4a817c800".to_string(), // 20 gwei
         data: Some(input.data.clone()),
         nonce: 0, // Will be fetched from chain
