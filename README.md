@@ -642,20 +642,15 @@ curl -X POST http://localhost:4937 \
 
 ### GitHub Workflows
 
-The project includes optimized CI/CD workflows for different scenarios:
+The project uses a single, unified CI/CD workflow optimized for all scenarios:
 
-#### **Main CI Pipeline** (`.github/workflows/fast-ci.yml`)
-- **Full Testing**: Format, clippy, cargo-sort, test, build
+#### **Unified CI Pipeline** (`.github/workflows/fast-ci.yml`)
+- **Comprehensive Testing**: Format, clippy, cargo-sort, test, build
 - **Advanced Caching**: Multi-level cache with cargo registry and build caching
 - **Parallel Execution**: Jobs run simultaneously for speed
 - **Docker Build**: Multi-arch images published to GHCR on main branch
-- **Performance**: ~3-4 minutes with warm cache
-
-#### **Fast CI Pipeline** (`.github/workflows/fast-ci.yml`)
-- **PR-Focused**: Quick feedback for pull requests
-- **Matrix Strategy**: Parallel format, clippy, sort checks
-- **Reliable Caching**: Multi-level cargo caching without sccache complexity
-- **Performance**: ~1-2 minutes for PR checks
+- **Dual Triggers**: Runs on both PRs and main branch pushes
+- **Performance**: ~3-4 minutes with warm cache, ~1-2 minutes for PR checks
 
 
 ### Performance Optimizations
