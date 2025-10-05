@@ -644,23 +644,19 @@ curl -X POST http://localhost:4937 \
 
 The project includes optimized CI/CD workflows for different scenarios:
 
-#### **Main CI Pipeline** (`.github/workflows/ci.yml`)
-- **Full Testing**: Format, clippy, cargo-sort, udeps, audit
-- **Advanced Caching**: Multi-level cache with sccache support
+#### **Main CI Pipeline** (`.github/workflows/fast-ci.yml`)
+- **Full Testing**: Format, clippy, cargo-sort, test, build
+- **Advanced Caching**: Multi-level cache with cargo registry and build caching
 - **Parallel Execution**: Jobs run simultaneously for speed
-- **Docker Build**: Multi-arch images published to GHCR
+- **Docker Build**: Multi-arch images published to GHCR on main branch
 - **Performance**: ~3-4 minutes with warm cache
 
 #### **Fast CI Pipeline** (`.github/workflows/fast-ci.yml`)
 - **PR-Focused**: Quick feedback for pull requests
 - **Matrix Strategy**: Parallel format, clippy, sort checks
-- **Optional sccache**: Continues on cache failures
+- **Reliable Caching**: Multi-level cargo caching without sccache complexity
 - **Performance**: ~1-2 minutes for PR checks
 
-#### **Simple CI Pipeline** (`.github/workflows/simple-ci.yml`)
-- **Minimal Dependencies**: No sccache or complex caching
-- **Stable Only**: No nightly toolchain requirements
-- **Reliable Fallback**: When other workflows fail
 
 ### Performance Optimizations
 
@@ -674,7 +670,7 @@ The project includes optimized CI/CD workflows for different scenarios:
 - **Registry Cache**: `~/.cargo/registry` - Cached dependencies
 - **Index Cache**: `~/.cargo/git` - Git-based dependencies
 - **Build Cache**: `target/` - Compiled artifacts
-- **sccache**: `~/.cache/sccache` - Compilation cache
+- **Bin Cache**: `~/.cargo/bin` - Cached tools like cargo-sort
 
 ### Production Deployment
 

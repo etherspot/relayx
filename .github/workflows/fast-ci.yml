@@ -27,11 +27,6 @@ jobs:
       with:
         components: rustfmt, clippy
     
-    - name: Setup sccache (optional)
-      uses: mozilla-actions/sccache-action@v0.0.4
-      continue-on-error: true
-      with:
-        version: latest
     
     - name: Cache cargo registry
       uses: actions/cache@v3
@@ -75,13 +70,6 @@ jobs:
           cargo install cargo-sort --locked
         fi
 
-    - name: Disable sccache if cache fails
-      run: |
-        if [ "$SCCACHE_GHA_ENABLED" = "true" ]; then
-          echo "SCCACHE_GHA_ENABLED=false" >> $GITHUB_ENV
-          echo "RUSTC_WRAPPER=" >> $GITHUB_ENV
-        fi
-      continue-on-error: true
 
     - name: Run ${{ matrix.check }}
       run: |
@@ -110,11 +98,6 @@ jobs:
       with:
         components: rustfmt, clippy
     
-    - name: Setup sccache (optional)
-      uses: mozilla-actions/sccache-action@v0.0.4
-      continue-on-error: true
-      with:
-        version: latest
     
     - name: Cache cargo registry
       uses: actions/cache@v3
@@ -145,13 +128,6 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y librocksdb-dev
 
-    - name: Disable sccache if cache fails
-      run: |
-        if [ "$SCCACHE_GHA_ENABLED" = "true" ]; then
-          echo "SCCACHE_GHA_ENABLED=false" >> $GITHUB_ENV
-          echo "RUSTC_WRAPPER=" >> $GITHUB_ENV
-        fi
-      continue-on-error: true
 
     - name: Run tests
       run: cargo test --verbose
