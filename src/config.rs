@@ -224,4 +224,9 @@ impl Config {
         tokens.dedup();
         tokens
     }
+
+    /// Check if a chain ID is supported by checking if it has an RPC URL configured
+    pub fn is_chain_supported(&self, chain_id: u64) -> bool {
+        self.rpc_url_for_chain(&chain_id.to_string()).is_some()
+    }
 }

@@ -37,6 +37,11 @@ impl Storage {
         Ok(())
     }
 
+    /// Create and store a new relayer request
+    pub async fn create_request(&self, request: RelayerRequest) -> Result<()> {
+        self.store_request(&request).await
+    }
+
     /// Retrieve a relayer request by ID
     pub async fn get_request(&self, id: Uuid) -> Result<Option<RelayerRequest>> {
         let key = format!("request:{}", id);
