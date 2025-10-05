@@ -14,8 +14,8 @@ use crate::{
         ExchangeRateResultItem, ExchangeRateSuccess, GetCapabilitiesResponse, GetStatusRequest,
         GetStatusResponse, HealthResponse, Log, NativePayment, OffchainFailure, OnchainFailure,
         Payment, PaymentType, QuoteInner, QuoteRequest, QuoteResponse, Receipt, RelayerCall,
-        RequestStatus, Resubmission, SendTransactionRequest, SendTransactionResponse,
-        SendTransactionResult, SponsoredPayment, StatusResult, TokenInfo,
+        RelayerRequest, RequestStatus, Resubmission, SendTransactionRequest,
+        SendTransactionResponse, SendTransactionResult, SponsoredPayment, StatusResult, TokenInfo,
     },
 };
 
@@ -28,15 +28,113 @@ pub struct RpcServer {
 
 /// Endpoint business logic functions
 async fn process_send_transaction(
-    _storage: Storage,
-    _input: &SendTransactionRequest,
-    _cfg: &Config,
+    storage: Storage,
+    input: &SendTransactionRequest,
+    cfg: &Config,
 ) -> Result<SendTransactionResponse, jsonrpc_core::Error> {
-    // For now, return stub result as per existing stubbed builder
+    // Validate the transaction request
+    if input.to.is_empty() {
+        return Err(jsonrpc_core::Error::invalid_params(
+            "Missing required field: 'to'",
+        ));
+    }
+
+    if input.data.is_empty() {
+        return Err(jsonrpc_core::Error::invalid_params(
+            "Missing required field: 'data'",
+        ));
+    }
+
+    if input.chain_id.is_empty() {
+        return Err(jsonrpc_core::Error::invalid_params(
+            "Missing required field: 'chainId'",
+        ));
+    }
+
+    // Validate chain ID is a valid number
+    let chain_id: u64 = input.chain_id.parse().map_err(|_| {
+        jsonrpc_core::Error::invalid_params("Invalid chainId: must be a valid number")
+    })?;
+
+    // Check if chain is supported by the relayer
+    if !cfg.is_chain_supported(chain_id) {
+        return Err(jsonrpc_core::Error::invalid_params(format!(
+            "Unsupported chain ID: {}",
+            chain_id
+        )));
+    }
+
+    // Validate payment capability
+    match input.capabilities.payment.payment_type.as_str() {
+        "native" => {
+            // Validate native payment token address (should be zero address)
+            if input.capabilities.payment.token != "0x0000000000000000000000000000000000000000" {
+                return Err(jsonrpc_core::Error::invalid_params(
+                    "Invalid native payment token address",
+                ));
+            }
+        }
+        "erc20" => {
+            // Validate ERC20 token address format
+            if !input.capabilities.payment.token.starts_with("0x")
+                || input.capabilities.payment.token.len() != 42
+            {
+                return Err(jsonrpc_core::Error::invalid_params(
+                    "Invalid ERC20 token address format",
+                ));
+            }
+        }
+        "sponsored" => {
+            // Sponsored transactions don't require additional validation
+        }
+        _ => {
+            return Err(jsonrpc_core::Error::invalid_params(format!(
+                "Unsupported payment type: {}",
+                input.capabilities.payment.payment_type
+            )));
+        }
+    }
+
+    // Generate a unique transaction ID
+    let transaction_id = Uuid::new_v4().to_string();
+
+    // Create a relayer request record
+    let relayer_request = RelayerRequest {
+        id: Uuid::parse_str(&transaction_id).unwrap(),
+        from_address: "0x0000000000000000000000000000000000000000".to_string(), /* Will be filled from signature */
+        to_address: input.to.clone(),
+        amount: "0".to_string(), // Will be calculated based on transaction
+        gas_limit: 21000,        // Default gas limit, will be estimated
+        gas_price: "0x4a817c800".to_string(), // 20 gwei
+        data: Some(input.data.clone()),
+        nonce: 0, // Will be fetched from chain
+        chain_id,
+        status: RequestStatus::Pending,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        error_message: None,
+    };
+
+    // Store the request in storage
+    if let Err(e) = storage.create_request(relayer_request).await {
+        tracing::error!("Failed to store transaction request: {}", e);
+        return Err(jsonrpc_core::Error::internal_error());
+    }
+
+    // Log the transaction request
+    tracing::info!(
+        "Transaction request received - ID: {}, To: {}, Chain: {}, Payment: {}",
+        transaction_id,
+        input.to,
+        chain_id,
+        input.capabilities.payment.payment_type
+    );
+
+    // Return the response with the generated transaction ID
     Ok(SendTransactionResponse {
         result: vec![SendTransactionResult {
-            chain_id: "1".into(),
-            id: String::new(),
+            chain_id: input.chain_id.clone(),
+            id: transaction_id,
         }],
     })
 }
