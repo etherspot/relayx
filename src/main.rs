@@ -10,7 +10,7 @@ async fn main() -> Result<()> {
 
     // Get the configured log level
     let log_level = config.get_log_level();
-    
+
     // Parse the log level string
     let filter = match log_level.to_lowercase().as_str() {
         "trace" => "trace",
@@ -45,10 +45,10 @@ async fn main() -> Result<()> {
     // Create and start RPC server
     let rpc_host = config.get_http_address();
     let rpc_port = config.get_http_port();
-    
+
     tracing::info!("Creating RPC server on {}:{}", rpc_host, rpc_port);
     tracing::debug!("CORS configuration: {}", config.get_http_cors());
-    
+
     let rpc_server = RpcServer::new(rpc_host.clone(), rpc_port, storage.clone(), config.clone())?;
 
     tracing::info!("✓ RPC server initialized successfully");

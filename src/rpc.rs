@@ -79,8 +79,7 @@ async fn simulate_transaction(
         .map_err(|e| format!("Invalid calldata format: {}", e))?;
 
     // Load the ABI and verify the function being called
-    let abi = load_wallet_abi()
-        .map_err(|e| format!("Failed to load wallet ABI: {}", e))?;
+    let abi = load_wallet_abi().map_err(|e| format!("Failed to load wallet ABI: {}", e))?;
 
     // Check if the calldata is calling executeWithRelayer
     // The first 4 bytes are the function selector
@@ -89,7 +88,7 @@ async fn simulate_transaction(
     }
 
     let function_selector = &calldata_bytes[..4];
-    
+
     // Find the executeWithRelayer function
     let execute_with_relayer_fn = abi
         .functions()
@@ -98,7 +97,7 @@ async fn simulate_transaction(
 
     // Get the expected selector
     let expected_selector = execute_with_relayer_fn.selector();
-    
+
     // Verify the selector matches
     if function_selector != expected_selector.as_slice() {
         return Err(format!(
@@ -109,8 +108,11 @@ async fn simulate_transaction(
     }
 
     // Create provider for the chain
-    let provider = ProviderBuilder::new()
-        .on_http(rpc_url.parse().map_err(|e| format!("Invalid RPC URL: {}", e))?);
+    let provider = ProviderBuilder::new().on_http(
+        rpc_url
+            .parse()
+            .map_err(|e| format!("Invalid RPC URL: {}", e))?,
+    );
 
     // Create a transaction request for simulation
     let tx = TransactionRequest::default()
@@ -133,7 +135,7 @@ async fn simulate_transaction(
                 chain_id,
                 gas_estimate
             );
-            Ok(gas_estimate as u64)
+            Ok(gas_estimate)
         }
         Err(e) => {
             let error_msg = format!("Gas estimation failed: {}", e);
@@ -150,9 +152,13 @@ async fn process_send_transaction(
     cfg: &Config,
 ) -> Result<SendTransactionResponse, jsonrpc_core::Error> {
     tracing::info!("=== relayer_sendTransaction request received ===");
-    tracing::debug!("Request details - To: {}, ChainId: {}, Payment: {}", 
-        input.to, input.chain_id, input.capabilities.payment.payment_type);
-    
+    tracing::debug!(
+        "Request details - To: {}, ChainId: {}, Payment: {}",
+        input.to,
+        input.chain_id,
+        input.capabilities.payment.payment_type
+    );
+
     // Validate the transaction request
     if input.to.is_empty() {
         tracing::warn!("Validation failed: Missing 'to' field");
@@ -182,7 +188,7 @@ async fn process_send_transaction(
     })?;
 
     tracing::debug!("Validating chain support for chainId: {}", chain_id);
-    
+
     // Check if chain is supported by the relayer
     if !cfg.is_chain_supported(chain_id) {
         tracing::warn!("Unsupported chain ID requested: {}", chain_id);
@@ -191,27 +197,33 @@ async fn process_send_transaction(
             chain_id
         )));
     }
-    
+
     tracing::debug!("Chain {} is supported", chain_id);
 
     // Default gas limit, will be updated by simulation if applicable
     let mut gas_limit: u64 = 21000;
 
-    tracing::debug!("Validating payment capability: {}", input.capabilities.payment.payment_type);
-    
+    tracing::debug!(
+        "Validating payment capability: {}",
+        input.capabilities.payment.payment_type
+    );
+
     // Validate payment capability
     match input.capabilities.payment.payment_type.as_str() {
         "native" => {
             tracing::debug!("Processing native payment transaction");
-            
+
             // Validate native payment token address (should be zero address)
             if input.capabilities.payment.token != "0x0000000000000000000000000000000000000000" {
-                tracing::warn!("Invalid native payment token address: {}", input.capabilities.payment.token);
+                tracing::warn!(
+                    "Invalid native payment token address: {}",
+                    input.capabilities.payment.token
+                );
                 return Err(jsonrpc_core::Error::invalid_params(
                     "Invalid native payment token address",
                 ));
             }
-            
+
             // Simulate transaction to ensure it will succeed and get gas estimate
             gas_limit = match simulate_transaction(&input.to, &input.data, chain_id, cfg).await {
                 Ok(gas) => gas,
@@ -228,7 +240,7 @@ async fn process_send_transaction(
                     )));
                 }
             };
-            
+
             tracing::info!(
                 "Transaction simulation successful - Wallet: {}, Chain: {}, Estimated Gas: {}",
                 input.to,
@@ -237,18 +249,24 @@ async fn process_send_transaction(
             );
         }
         "erc20" => {
-            tracing::debug!("Processing ERC20 payment transaction with token: {}", input.capabilities.payment.token);
-            
+            tracing::debug!(
+                "Processing ERC20 payment transaction with token: {}",
+                input.capabilities.payment.token
+            );
+
             // Validate ERC20 token address format
             if !input.capabilities.payment.token.starts_with("0x")
                 || input.capabilities.payment.token.len() != 42
             {
-                tracing::warn!("Invalid ERC20 token address format: {}", input.capabilities.payment.token);
+                tracing::warn!(
+                    "Invalid ERC20 token address format: {}",
+                    input.capabilities.payment.token
+                );
                 return Err(jsonrpc_core::Error::invalid_params(
                     "Invalid ERC20 token address format",
                 ));
             }
-            
+
             tracing::debug!("ERC20 token address validated successfully");
         }
         "sponsored" => {
@@ -256,7 +274,10 @@ async fn process_send_transaction(
             // Sponsored transactions don't require additional validation
         }
         _ => {
-            tracing::warn!("Unsupported payment type: {}", input.capabilities.payment.payment_type);
+            tracing::warn!(
+                "Unsupported payment type: {}",
+                input.capabilities.payment.payment_type
+            );
             return Err(jsonrpc_core::Error::invalid_params(format!(
                 "Unsupported payment type: {}",
                 input.capabilities.payment.payment_type
@@ -266,7 +287,7 @@ async fn process_send_transaction(
 
     // Generate a unique transaction ID
     let transaction_id = Uuid::new_v4().to_string();
-    
+
     tracing::info!("Generated transaction ID: {}", transaction_id);
     tracing::debug!("Creating relayer request with gas_limit: {}", gas_limit);
 
@@ -293,7 +314,7 @@ async fn process_send_transaction(
         tracing::error!("Failed to store transaction request: {}", e);
         return Err(jsonrpc_core::Error::internal_error());
     }
-    
+
     tracing::debug!("Transaction request stored successfully");
 
     // Log the transaction request
@@ -322,13 +343,17 @@ async fn process_get_status(
 ) -> Result<GetStatusResponse, jsonrpc_core::Error> {
     tracing::info!("=== relayer_getStatus request received ===");
     tracing::debug!("Querying status for {} transaction(s)", request.ids.len());
-    
+
     for id in &request.ids {
         tracing::debug!("Looking up transaction ID: {}", id);
         if let Ok(uuid) = Uuid::parse_str(id) {
             if let Ok(Some(req)) = storage.get_request(uuid).await {
-                tracing::debug!("Found transaction {} - Status: {:?}, Chain: {}", 
-                    id, req.status, req.chain_id);
+                tracing::debug!(
+                    "Found transaction {} - Status: {:?}, Chain: {}",
+                    id,
+                    req.status,
+                    req.chain_id
+                );
                 // Could enrich response using stored data
             } else {
                 tracing::debug!("Transaction {} not found in storage", id);
@@ -337,8 +362,11 @@ async fn process_get_status(
             tracing::warn!("Invalid UUID format for transaction ID: {}", id);
         }
     }
-    
-    tracing::info!("✓ Status query completed for {} transaction(s)", request.ids.len());
+
+    tracing::info!(
+        "✓ Status query completed for {} transaction(s)",
+        request.ids.len()
+    );
     Ok(build_get_status_response(request))
 }
 
@@ -347,14 +375,11 @@ async fn process_health_check(
     _cfg: &Config,
 ) -> Result<HealthResponse, jsonrpc_core::Error> {
     tracing::debug!("=== health_check request received ===");
-    
-    let total_requests = storage
-        .get_total_request_count()
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to get total request count: {}", e);
-            jsonrpc_core::Error::internal_error()
-        })?;
+
+    let total_requests = storage.get_total_request_count().await.map_err(|e| {
+        tracing::error!("Failed to get total request count: {}", e);
+        jsonrpc_core::Error::internal_error()
+    })?;
 
     let pending_requests = storage
         .get_request_count_by_status(RequestStatus::Pending)
@@ -382,7 +407,11 @@ async fn process_health_check(
 
     tracing::debug!(
         "Health metrics - Total: {}, Pending: {}, Completed: {}, Failed: {}, Uptime: {}s",
-        total_requests, pending_requests, completed_requests, failed_requests, storage.get_uptime_seconds()
+        total_requests,
+        pending_requests,
+        completed_requests,
+        failed_requests,
+        storage.get_uptime_seconds()
     );
 
     Ok(build_health_response(
@@ -399,12 +428,15 @@ async fn process_get_capabilities(
     cfg: &Config,
 ) -> Result<GetCapabilitiesResponse, jsonrpc_core::Error> {
     tracing::info!("=== relayer_getCapabilities request received ===");
-    
+
     // Build capabilities based on configuration
     // Extract all supported tokens from the chainlink configuration
     let supported_tokens = cfg.get_supported_tokens();
-    
-    tracing::debug!("Found {} supported token(s) from configuration", supported_tokens.len());
+
+    tracing::debug!(
+        "Found {} supported token(s) from configuration",
+        supported_tokens.len()
+    );
 
     let mut payments = Vec::new();
 
@@ -423,7 +455,10 @@ async fn process_get_capabilities(
             .default_token()
             .unwrap_or_else(|| "0x036CbD53842c5426634e7929541eC2318f3dCF7e".to_string()); // USDC on Ethereum
 
-        tracing::debug!("No tokens configured, using default token: {}", default_token);
+        tracing::debug!(
+            "No tokens configured, using default token: {}",
+            default_token
+        );
         payments.push(Payment::Erc20(Erc20Payment {
             payment_type: PaymentType::Erc20,
             token: default_token,
@@ -444,8 +479,11 @@ async fn process_get_capabilities(
     }));
 
     let capabilities = Capabilities { payment: payments };
-    
-    tracing::info!("✓ Returning {} payment capability option(s)", capabilities.payment.len());
+
+    tracing::info!(
+        "✓ Returning {} payment capability option(s)",
+        capabilities.payment.len()
+    );
 
     Ok(GetCapabilitiesResponse { capabilities })
 }
@@ -485,9 +523,12 @@ async fn build_exchange_rate_response_stub(
     cfg: &Config,
     req: &ExchangeRateRequest,
 ) -> ExchangeRateResponse {
-    tracing::debug!("Building exchange rate response for token: {} on chain: {}", 
-        req.token, req.chain_id);
-    
+    tracing::debug!(
+        "Building exchange rate response for token: {} on chain: {}",
+        req.token,
+        req.chain_id
+    );
+
     let now = Utc::now().timestamp() as u64;
     let expiry = now + 600;
 
@@ -716,12 +757,10 @@ impl RpcServer {
         // Start the HTTP server
         tracing::info!("Starting HTTP server");
         let addr = format!("{}:{}", self.host, self.port);
-        let socket_addr: SocketAddr = addr
-            .parse()
-            .map_err(|e| {
-                tracing::error!("Invalid server address '{}': {}", addr, e);
-                anyhow::anyhow!("Invalid address: {}", e)
-            })?;
+        let socket_addr: SocketAddr = addr.parse().map_err(|e| {
+            tracing::error!("Invalid server address '{}': {}", addr, e);
+            anyhow::anyhow!("Invalid address: {}", e)
+        })?;
 
         tracing::debug!("Binding server to address: {}", socket_addr);
         let server = ServerBuilder::new(io)
