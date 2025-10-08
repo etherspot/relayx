@@ -3,6 +3,7 @@
   "http_address": "127.0.0.1",
   "http_port": 4937,
   "http_cors": "*",
+  "log_level": "debug",
   "defaultToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   "rpcs": {
     "1": "https://ethereum.publicnode.com",

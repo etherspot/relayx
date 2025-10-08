@@ -51,6 +51,10 @@ pub struct Config {
     /// HTTP CORS setting: "*" or comma-separated origins (overridable by config.json)
     #[arg(long = "http-cors", env = "HTTP_CORS", default_value = "*")]
     pub http_cors: String,
+
+    /// Log level: trace, debug, info, warn, error
+    #[arg(long = "log-level", env = "LOG_LEVEL", default_value = "debug")]
+    pub log_level: String,
 }
 
 impl Config {
@@ -228,5 +232,16 @@ impl Config {
     /// Check if a chain ID is supported by checking if it has an RPC URL configured
     pub fn is_chain_supported(&self, chain_id: u64) -> bool {
         self.rpc_url_for_chain(&chain_id.to_string()).is_some()
+    }
+
+    /// Get the effective log level from config.json or CLI
+    pub fn get_log_level(&self) -> String {
+        self.get_json_config()
+            .and_then(|v| {
+                v.get("log_level")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| self.log_level.clone())
     }
 }
