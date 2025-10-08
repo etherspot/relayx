@@ -2,8 +2,8 @@ use relayx::{
     config::Config,
     storage::Storage,
     types::{
-        ExchangeRateRequest, GetStatusRequest, QuoteRequest, SendTransactionRequest,
-        SendTransactionCapabilities, PaymentCapability,
+        ExchangeRateRequest, GetStatusRequest, PaymentCapability, QuoteRequest,
+        SendTransactionCapabilities, SendTransactionRequest,
     },
 };
 use serde_json::json;
@@ -12,7 +12,7 @@ use tempfile::TempDir;
 /// Helper function to create a test configuration
 fn create_test_config(temp_dir: &TempDir) -> Config {
     let db_path = temp_dir.path().join("test_db");
-    
+
     Config {
         rpc_host: "127.0.0.1".to_string(),
         rpc_port: 0, // Use 0 for random port in tests
@@ -270,10 +270,7 @@ mod exchange_rate_tests {
             chain_id: "1".to_string(),
         };
 
-        assert_eq!(
-            request.token,
-            "0x0000000000000000000000000000000000000000"
-        );
+        assert_eq!(request.token, "0x0000000000000000000000000000000000000000");
         assert_eq!(request.chain_id, "1");
     }
 
@@ -342,10 +339,11 @@ mod quote_tests {
 
 #[cfg(test)]
 mod storage_tests {
-    use super::*;
+    use chrono::Utc;
     use relayx::types::{RelayerRequest, RequestStatus};
     use uuid::Uuid;
-    use chrono::Utc;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_create_and_retrieve_request() {
@@ -542,9 +540,8 @@ mod storage_tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = create_test_storage(&temp_dir);
 
-        let uptime = storage.get_uptime_seconds();
-        // Uptime is u64, so it's always >= 0, just verify it exists
-        assert!(uptime == 0 || uptime > 0);
+        let _uptime = storage.get_uptime_seconds();
+        // Uptime is u64, so it's always >= 0. Just verify the call succeeds.
     }
 }
 
