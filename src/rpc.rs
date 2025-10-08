@@ -1,5 +1,11 @@
 use std::net::SocketAddr;
 
+use alloy::{
+    json_abi::JsonAbi,
+    primitives::{Address, Bytes},
+    providers::{Provider, ProviderBuilder},
+    rpc::types::TransactionRequest,
+};
 use anyhow::Result;
 use chrono::Utc;
 use jsonrpc_core::{IoHandler, Params};
@@ -24,6 +30,117 @@ pub struct RpcServer {
     port: u16,
     storage: Storage,
     config: Config,
+}
+
+/// Load the wallet ABI from the JSON file
+fn load_wallet_abi() -> Result<JsonAbi, anyhow::Error> {
+    let abi_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("abi.json");
+
+    let abi_content = std::fs::read_to_string(&abi_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read ABI file at {:?}: {}", abi_path, e))?;
+
+    let abi_json: serde_json::Value = serde_json::from_str(&abi_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse ABI JSON: {}", e))?;
+
+    // Extract the 'abi' field from the JSON
+    let abi_array = abi_json
+        .get("abi")
+        .ok_or_else(|| anyhow::anyhow!("ABI JSON missing 'abi' field"))?;
+
+    let abi: JsonAbi = serde_json::from_value(abi_array.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to deserialize ABI: {}", e))?;
+
+    Ok(abi)
+}
+
+/// Simulate a transaction and estimate gas consumption
+/// Returns the estimated gas on success
+async fn simulate_transaction(
+    wallet_address: &str,
+    calldata: &str,
+    chain_id: u64,
+    cfg: &Config,
+) -> Result<u64, String> {
+    // Get RPC URL for the chain
+    let rpc_url = cfg
+        .rpc_url_for_chain(&chain_id.to_string())
+        .ok_or_else(|| format!("No RPC URL configured for chain {}", chain_id))?;
+
+    // Parse the wallet address
+    let wallet_addr: Address = wallet_address
+        .parse()
+        .map_err(|e| format!("Invalid wallet address: {}", e))?;
+
+    // Parse the calldata
+    let calldata_bytes: Bytes = calldata
+        .parse()
+        .map_err(|e| format!("Invalid calldata format: {}", e))?;
+
+    // Load the ABI and verify the function being called
+    let abi = load_wallet_abi()
+        .map_err(|e| format!("Failed to load wallet ABI: {}", e))?;
+
+    // Check if the calldata is calling executeWithRelayer
+    // The first 4 bytes are the function selector
+    if calldata_bytes.len() < 4 {
+        return Err("Calldata too short".to_string());
+    }
+
+    let function_selector = &calldata_bytes[..4];
+    
+    // Find the executeWithRelayer function
+    let execute_with_relayer_fn = abi
+        .functions()
+        .find(|f| f.name == "executeWithRelayer")
+        .ok_or_else(|| "executeWithRelayer function not found in ABI".to_string())?;
+
+    // Get the expected selector
+    let expected_selector = execute_with_relayer_fn.selector();
+    
+    // Verify the selector matches
+    if function_selector != expected_selector.as_slice() {
+        return Err(format!(
+            "Transaction is not calling executeWithRelayer (expected selector: 0x{}, got: 0x{})",
+            hex::encode(expected_selector),
+            hex::encode(function_selector)
+        ));
+    }
+
+    // Create provider for the chain
+    let provider = ProviderBuilder::new()
+        .on_http(rpc_url.parse().map_err(|e| format!("Invalid RPC URL: {}", e))?);
+
+    // Create a transaction request for simulation
+    let tx = TransactionRequest::default()
+        .to(wallet_addr)
+        .input(calldata_bytes.into());
+
+    // First, simulate the transaction using eth_call to ensure it won't revert
+    if let Err(e) = provider.call(&tx).await {
+        let error_msg = format!("Transaction simulation failed: {}", e);
+        tracing::warn!("{}", error_msg);
+        return Err(error_msg);
+    }
+
+    // Now estimate the gas required for the transaction
+    match provider.estimate_gas(&tx).await {
+        Ok(gas_estimate) => {
+            tracing::info!(
+                "Transaction simulation succeeded for wallet {} on chain {}, estimated gas: {}",
+                wallet_address,
+                chain_id,
+                gas_estimate
+            );
+            Ok(gas_estimate as u64)
+        }
+        Err(e) => {
+            let error_msg = format!("Gas estimation failed: {}", e);
+            tracing::warn!("{}", error_msg);
+            Err(error_msg)
+        }
+    }
 }
 
 /// Endpoint business logic functions
@@ -64,6 +181,9 @@ async fn process_send_transaction(
         )));
     }
 
+    // Default gas limit, will be updated by simulation if applicable
+    let mut gas_limit: u64 = 21000;
+
     // Validate payment capability
     match input.capabilities.payment.payment_type.as_str() {
         "native" => {
@@ -73,6 +193,30 @@ async fn process_send_transaction(
                     "Invalid native payment token address",
                 ));
             }
+            
+            // Simulate transaction to ensure it will succeed and get gas estimate
+            gas_limit = match simulate_transaction(&input.to, &input.data, chain_id, cfg).await {
+                Ok(gas) => gas,
+                Err(e) => {
+                    tracing::error!(
+                        "Transaction simulation failed for wallet {} on chain {}: {}",
+                        input.to,
+                        chain_id,
+                        e
+                    );
+                    return Err(jsonrpc_core::Error::invalid_params(format!(
+                        "Transaction simulation failed: {}",
+                        e
+                    )));
+                }
+            };
+            
+            tracing::info!(
+                "Transaction simulation successful - Wallet: {}, Chain: {}, Estimated Gas: {}",
+                input.to,
+                chain_id,
+                gas_limit
+            );
         }
         "erc20" => {
             // Validate ERC20 token address format
@@ -104,7 +248,7 @@ async fn process_send_transaction(
         from_address: "0x0000000000000000000000000000000000000000".to_string(), /* Will be filled from signature */
         to_address: input.to.clone(),
         amount: "0".to_string(), // Will be calculated based on transaction
-        gas_limit: 21000,        // Default gas limit, will be estimated
+        gas_limit,               // Gas limit from simulation or default
         gas_price: "0x4a817c800".to_string(), // 20 gwei
         data: Some(input.data.clone()),
         nonce: 0, // Will be fetched from chain

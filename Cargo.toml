@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+alloy = { version = "0.6", features = ["full", "node-bindings", "rpc-types-eth"] }
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.0", features = ["derive", "env"] }
+hex = "0.4"
 jsonrpc-core = "18.0"
 jsonrpc-http-server = "18.0"
 rocksdb = "0.21"
