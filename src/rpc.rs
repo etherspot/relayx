@@ -149,20 +149,27 @@ async fn process_send_transaction(
     input: &SendTransactionRequest,
     cfg: &Config,
 ) -> Result<SendTransactionResponse, jsonrpc_core::Error> {
+    tracing::info!("=== relayer_sendTransaction request received ===");
+    tracing::debug!("Request details - To: {}, ChainId: {}, Payment: {}", 
+        input.to, input.chain_id, input.capabilities.payment.payment_type);
+    
     // Validate the transaction request
     if input.to.is_empty() {
+        tracing::warn!("Validation failed: Missing 'to' field");
         return Err(jsonrpc_core::Error::invalid_params(
             "Missing required field: 'to'",
         ));
     }
 
     if input.data.is_empty() {
+        tracing::warn!("Validation failed: Missing 'data' field");
         return Err(jsonrpc_core::Error::invalid_params(
             "Missing required field: 'data'",
         ));
     }
 
     if input.chain_id.is_empty() {
+        tracing::warn!("Validation failed: Missing 'chainId' field");
         return Err(jsonrpc_core::Error::invalid_params(
             "Missing required field: 'chainId'",
         ));
@@ -170,25 +177,36 @@ async fn process_send_transaction(
 
     // Validate chain ID is a valid number
     let chain_id: u64 = input.chain_id.parse().map_err(|_| {
+        tracing::warn!("Invalid chainId format: {}", input.chain_id);
         jsonrpc_core::Error::invalid_params("Invalid chainId: must be a valid number")
     })?;
 
+    tracing::debug!("Validating chain support for chainId: {}", chain_id);
+    
     // Check if chain is supported by the relayer
     if !cfg.is_chain_supported(chain_id) {
+        tracing::warn!("Unsupported chain ID requested: {}", chain_id);
         return Err(jsonrpc_core::Error::invalid_params(format!(
             "Unsupported chain ID: {}",
             chain_id
         )));
     }
+    
+    tracing::debug!("Chain {} is supported", chain_id);
 
     // Default gas limit, will be updated by simulation if applicable
     let mut gas_limit: u64 = 21000;
 
+    tracing::debug!("Validating payment capability: {}", input.capabilities.payment.payment_type);
+    
     // Validate payment capability
     match input.capabilities.payment.payment_type.as_str() {
         "native" => {
+            tracing::debug!("Processing native payment transaction");
+            
             // Validate native payment token address (should be zero address)
             if input.capabilities.payment.token != "0x0000000000000000000000000000000000000000" {
+                tracing::warn!("Invalid native payment token address: {}", input.capabilities.payment.token);
                 return Err(jsonrpc_core::Error::invalid_params(
                     "Invalid native payment token address",
                 ));
@@ -219,19 +237,26 @@ async fn process_send_transaction(
             );
         }
         "erc20" => {
+            tracing::debug!("Processing ERC20 payment transaction with token: {}", input.capabilities.payment.token);
+            
             // Validate ERC20 token address format
             if !input.capabilities.payment.token.starts_with("0x")
                 || input.capabilities.payment.token.len() != 42
             {
+                tracing::warn!("Invalid ERC20 token address format: {}", input.capabilities.payment.token);
                 return Err(jsonrpc_core::Error::invalid_params(
                     "Invalid ERC20 token address format",
                 ));
             }
+            
+            tracing::debug!("ERC20 token address validated successfully");
         }
         "sponsored" => {
+            tracing::debug!("Processing sponsored transaction");
             // Sponsored transactions don't require additional validation
         }
         _ => {
+            tracing::warn!("Unsupported payment type: {}", input.capabilities.payment.payment_type);
             return Err(jsonrpc_core::Error::invalid_params(format!(
                 "Unsupported payment type: {}",
                 input.capabilities.payment.payment_type
@@ -241,6 +266,9 @@ async fn process_send_transaction(
 
     // Generate a unique transaction ID
     let transaction_id = Uuid::new_v4().to_string();
+    
+    tracing::info!("Generated transaction ID: {}", transaction_id);
+    tracing::debug!("Creating relayer request with gas_limit: {}", gas_limit);
 
     // Create a relayer request record
     let relayer_request = RelayerRequest {
@@ -260,18 +288,22 @@ async fn process_send_transaction(
     };
 
     // Store the request in storage
+    tracing::debug!("Storing transaction request in database");
     if let Err(e) = storage.create_request(relayer_request).await {
         tracing::error!("Failed to store transaction request: {}", e);
         return Err(jsonrpc_core::Error::internal_error());
     }
+    
+    tracing::debug!("Transaction request stored successfully");
 
     // Log the transaction request
     tracing::info!(
-        "Transaction request received - ID: {}, To: {}, Chain: {}, Payment: {}",
+        "✓ Transaction accepted - ID: {}, To: {}, Chain: {}, Payment: {}, Gas: {}",
         transaction_id,
         input.to,
         chain_id,
-        input.capabilities.payment.payment_type
+        input.capabilities.payment.payment_type,
+        gas_limit
     );
 
     // Return the response with the generated transaction ID
@@ -288,13 +320,25 @@ async fn process_get_status(
     request: &GetStatusRequest,
     _cfg: &Config,
 ) -> Result<GetStatusResponse, jsonrpc_core::Error> {
+    tracing::info!("=== relayer_getStatus request received ===");
+    tracing::debug!("Querying status for {} transaction(s)", request.ids.len());
+    
     for id in &request.ids {
+        tracing::debug!("Looking up transaction ID: {}", id);
         if let Ok(uuid) = Uuid::parse_str(id) {
-            if let Ok(Some(_req)) = storage.get_request(uuid).await {
+            if let Ok(Some(req)) = storage.get_request(uuid).await {
+                tracing::debug!("Found transaction {} - Status: {:?}, Chain: {}", 
+                    id, req.status, req.chain_id);
                 // Could enrich response using stored data
+            } else {
+                tracing::debug!("Transaction {} not found in storage", id);
             }
+        } else {
+            tracing::warn!("Invalid UUID format for transaction ID: {}", id);
         }
     }
+    
+    tracing::info!("✓ Status query completed for {} transaction(s)", request.ids.len());
     Ok(build_get_status_response(request))
 }
 
@@ -302,25 +346,44 @@ async fn process_health_check(
     storage: Storage,
     _cfg: &Config,
 ) -> Result<HealthResponse, jsonrpc_core::Error> {
+    tracing::debug!("=== health_check request received ===");
+    
     let total_requests = storage
         .get_total_request_count()
         .await
-        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+        .map_err(|e| {
+            tracing::error!("Failed to get total request count: {}", e);
+            jsonrpc_core::Error::internal_error()
+        })?;
 
     let pending_requests = storage
         .get_request_count_by_status(RequestStatus::Pending)
         .await
-        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+        .map_err(|e| {
+            tracing::error!("Failed to get pending request count: {}", e);
+            jsonrpc_core::Error::internal_error()
+        })?;
 
     let completed_requests = storage
         .get_request_count_by_status(RequestStatus::Completed)
         .await
-        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+        .map_err(|e| {
+            tracing::error!("Failed to get completed request count: {}", e);
+            jsonrpc_core::Error::internal_error()
+        })?;
 
     let failed_requests = storage
         .get_request_count_by_status(RequestStatus::Failed)
         .await
-        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+        .map_err(|e| {
+            tracing::error!("Failed to get failed request count: {}", e);
+            jsonrpc_core::Error::internal_error()
+        })?;
+
+    tracing::debug!(
+        "Health metrics - Total: {}, Pending: {}, Completed: {}, Failed: {}, Uptime: {}s",
+        total_requests, pending_requests, completed_requests, failed_requests, storage.get_uptime_seconds()
+    );
 
     Ok(build_health_response(
         storage.get_uptime_seconds(),
@@ -335,17 +398,22 @@ async fn process_get_capabilities(
     _storage: Storage,
     cfg: &Config,
 ) -> Result<GetCapabilitiesResponse, jsonrpc_core::Error> {
+    tracing::info!("=== relayer_getCapabilities request received ===");
+    
     // Build capabilities based on configuration
     // Extract all supported tokens from the chainlink configuration
     let supported_tokens = cfg.get_supported_tokens();
+    
+    tracing::debug!("Found {} supported token(s) from configuration", supported_tokens.len());
 
     let mut payments = Vec::new();
 
     // Add ERC20 payment options for each supported token
-    for token in supported_tokens {
+    for token in &supported_tokens {
+        tracing::debug!("Adding ERC20 payment capability for token: {}", token);
         payments.push(Payment::Erc20(Erc20Payment {
             payment_type: PaymentType::Erc20,
-            token,
+            token: token.clone(),
         }));
     }
 
@@ -355,6 +423,7 @@ async fn process_get_capabilities(
             .default_token()
             .unwrap_or_else(|| "0x036CbD53842c5426634e7929541eC2318f3dCF7e".to_string()); // USDC on Ethereum
 
+        tracing::debug!("No tokens configured, using default token: {}", default_token);
         payments.push(Payment::Erc20(Erc20Payment {
             payment_type: PaymentType::Erc20,
             token: default_token,
@@ -362,17 +431,21 @@ async fn process_get_capabilities(
     }
 
     // Always include native payment option
+    tracing::debug!("Adding native payment capability");
     payments.push(Payment::Native(NativePayment {
         payment_type: PaymentType::Native,
         token: "0x0000000000000000000000000000000000000000".to_string(),
     }));
 
     // Always include sponsored payment option
+    tracing::debug!("Adding sponsored payment capability");
     payments.push(Payment::Sponsored(SponsoredPayment {
         payment_type: PaymentType::Sponsored,
     }));
 
     let capabilities = Capabilities { payment: payments };
+    
+    tracing::info!("✓ Returning {} payment capability option(s)", capabilities.payment.len());
 
     Ok(GetCapabilitiesResponse { capabilities })
 }
@@ -412,6 +485,9 @@ async fn build_exchange_rate_response_stub(
     cfg: &Config,
     req: &ExchangeRateRequest,
 ) -> ExchangeRateResponse {
+    tracing::debug!("Building exchange rate response for token: {} on chain: {}", 
+        req.token, req.chain_id);
+    
     let now = Utc::now().timestamp() as u64;
     let expiry = now + 600;
 
@@ -536,9 +612,11 @@ impl RpcServer {
     }
 
     pub async fn start(&self) -> Result<()> {
+        tracing::info!("Initializing JSON-RPC handler");
         let mut io = IoHandler::new();
 
         // Endpoint 1: relayer_sendTransaction
+        tracing::debug!("Registering endpoint: relayer_sendTransaction");
         let storage1 = self.storage.clone();
         let cfg1 = self.config.clone();
         io.add_method("relayer_sendTransaction", move |params: Params| {
@@ -559,6 +637,7 @@ impl RpcServer {
         });
 
         // Endpoint 2: relayer_getStatus
+        tracing::debug!("Registering endpoint: relayer_getStatus");
         let storage2 = self.storage.clone();
         let cfg2 = self.config.clone();
         io.add_method("relayer_getStatus", move |params: Params| {
@@ -576,6 +655,7 @@ impl RpcServer {
         });
 
         // Endpoint 3: Health check
+        tracing::debug!("Registering endpoint: health_check");
         let storage3 = self.storage.clone();
         let cfg3 = self.config.clone();
         io.add_method("health_check", move |_params: Params| {
@@ -590,6 +670,7 @@ impl RpcServer {
         });
 
         // New Endpoint: relayer_getExchangeRate
+        tracing::debug!("Registering endpoint: relayer_getExchangeRate");
         let cfg4 = self.config.clone();
         io.add_method("relayer_getExchangeRate", move |params: Params| {
             let cfg = cfg4.clone();
@@ -608,6 +689,7 @@ impl RpcServer {
         });
 
         // New Endpoint: relayer_getQuote
+        tracing::debug!("Registering endpoint: relayer_getQuote");
         io.add_method("relayer_getQuote", |params: Params| async move {
             let _inputs: Vec<QuoteRequest> = params
                 .parse::<Vec<QuoteRequest>>()
@@ -617,6 +699,7 @@ impl RpcServer {
         });
 
         // New Endpoint: relayer_getCapabilities
+        tracing::debug!("Registering endpoint: relayer_getCapabilities");
         let storage5 = self.storage.clone();
         let cfg5 = self.config.clone();
         io.add_method("relayer_getCapabilities", move |_params: Params| {
@@ -631,16 +714,35 @@ impl RpcServer {
         });
 
         // Start the HTTP server
+        tracing::info!("Starting HTTP server");
         let addr = format!("{}:{}", self.host, self.port);
         let socket_addr: SocketAddr = addr
             .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?;
+            .map_err(|e| {
+                tracing::error!("Invalid server address '{}': {}", addr, e);
+                anyhow::anyhow!("Invalid address: {}", e)
+            })?;
 
-        let server = ServerBuilder::new(io).threads(4).start_http(&socket_addr)?;
+        tracing::debug!("Binding server to address: {}", socket_addr);
+        let server = ServerBuilder::new(io)
+            .threads(4)
+            .start_http(&socket_addr)
+            .map_err(|e| {
+                tracing::error!("Failed to start HTTP server on {}: {}", socket_addr, e);
+                e
+            })?;
 
-        tracing::info!("JSON-RPC server started on {}", socket_addr);
+        tracing::info!("✓ JSON-RPC server listening on {}", socket_addr);
+        tracing::info!("Available endpoints:");
+        tracing::info!("  - relayer_sendTransaction");
+        tracing::info!("  - relayer_getStatus");
+        tracing::info!("  - relayer_getCapabilities");
+        tracing::info!("  - relayer_getExchangeRate");
+        tracing::info!("  - relayer_getQuote");
+        tracing::info!("  - health_check");
 
         // Keep the server running
+        tracing::info!("Server is ready and waiting for requests");
         server.wait();
 
         Ok(())

@@ -8,12 +8,15 @@ This relayer service provides a standardized off-chain architecture that enables
 
 - **Gasless Transactions**: Support for ERC-20 token-based transaction fee payments
 - **Transaction Relaying**: Submit signed transactions through a standardized relayer interface
+- **Transaction Simulation**: Pre-execution simulation using `eth_call` to validate transactions before submission
+- **Gas Estimation**: Automatic gas estimation for all transactions using on-chain simulation
 - **Exchange Rate Simulation**: Get token-to-gas conversion rates with stub responses for fast testing
 - **Transaction Status Tracking**: Monitor the lifecycle of submitted transactions with persistent storage
 - **Multi-token Support**: Configurable support for multiple ERC-20 tokens across different networks
 - **Capability Discovery**: Automatically discover supported payment methods and tokens from configuration
 - **Health Monitoring**: Built-in health check and metrics endpoints for monitoring
-- **Simplified Architecture**: No blockchain dependencies for fast, reliable operation
+- **Configurable Logging**: Comprehensive logging system with multiple log levels (trace, debug, info, warn, error)
+- **Smart Account Integration**: Built-in support for `executeWithRelayer` function validation
 
 ## Architecture
 
@@ -111,6 +114,7 @@ docker run --rm -p 4937:4937 -e RELAYX_CONFIG=/app/config.json \
 - `--http-address` (`HTTP_ADDRESS`): Server bind address (default: 127.0.0.1)
 - `--http-port` (`HTTP_PORT`): Server port (default: 4937)
 - `--http-cors` (`HTTP_CORS`): CORS origins (default: "*")
+- `--log-level` (`LOG_LEVEL`): Logging level - trace, debug, info, warn, error (default: debug)
 - `--db-path`: RocksDB storage path (default: ./relayx_db)
 - `--config` (`RELAYX_CONFIG`): Path to JSON configuration file
 
@@ -123,8 +127,13 @@ The relayer supports streamlined configuration via JSON file:
   "http_address": "127.0.0.1",
   "http_port": 4937,
   "http_cors": "*",
+  "log_level": "debug",
   "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
   "defaultToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "rpcs": {
+    "1": "https://ethereum.publicnode.com",
+    "137": "https://polygon-rpc.com"
+  },
   "chainlink": {
     "tokenUsd": {
       "1": {
@@ -141,7 +150,15 @@ The relayer supports streamlined configuration via JSON file:
 }
 ```
 
-**Note**: The `rpcs` and `chainlink.nativeUsd` configurations are no longer required as the relayer uses stub responses for exchange rates instead of making blockchain calls.
+**Configuration Fields:**
+- `http_address`: HTTP server bind address
+- `http_port`: HTTP server port number
+- `http_cors`: CORS policy configuration
+- `log_level`: Logging verbosity (trace, debug, info, warn, error)
+- `feeCollector`: Address to receive relayer fees
+- `defaultToken`: Fallback ERC20 token address
+- `rpcs`: RPC URLs for each supported chain (required for transaction simulation)
+- `chainlink`: Token price feed addresses for exchange rate calculations
 
 ### Token Discovery
 
@@ -158,7 +175,79 @@ The relayer automatically discovers supported ERC20 tokens from the `chainlink.t
 - `RELAYX_DEFAULT_TOKEN`: Default ERC20 token address for fallback
 - `RELAYX_FEE_COLLECTOR`: Address to receive relayer fees
 
-**Note**: Blockchain RPC and Chainlink feed configurations are no longer required as the relayer uses simplified stub responses for exchange rates and capabilities discovery.
+### Transaction Simulation & Gas Estimation
+
+The relayer includes built-in transaction simulation to validate transactions before submission:
+
+**Features:**
+- **Pre-execution Validation**: Uses `eth_call` to simulate transactions before broadcasting
+- **Gas Estimation**: Automatically estimates gas requirements using `eth_estimateGas`
+- **Function Verification**: Validates that transactions call the `executeWithRelayer` function
+- **ABI Validation**: Checks function selectors against the wallet ABI
+- **Error Prevention**: Catches reverts before submitting to the chain
+
+**How It Works:**
+1. When a native payment transaction is received, the relayer:
+   - Loads the wallet ABI from `resources/abi.json`
+   - Validates the function selector matches `executeWithRelayer`
+   - Simulates the transaction using `eth_call` to check for reverts
+   - Estimates gas consumption using `eth_estimateGas`
+   - Stores the estimated gas limit in the database
+2. The estimated gas is used when submitting the actual transaction
+3. Failed simulations return detailed error messages to the client
+
+**Benefits:**
+- Prevents failed transactions and wasted gas
+- Provides accurate gas estimates for fee calculation
+- Validates transaction structure before submission
+- Improves user experience with clear error messages
+
+### Logging System
+
+The relayer features a comprehensive logging system with multiple log levels:
+
+**Log Levels:**
+- `trace`: Very detailed diagnostic information (storage operations, internal state)
+- `debug`: Detailed information useful for debugging (request parsing, validation steps)
+- `info`: General informational messages (transaction acceptance, startup events)
+- `warn`: Warning messages (validation failures, missing data)
+- `error`: Error messages (database failures, simulation errors)
+
+**Configuration:**
+```bash
+# Via CLI flag
+./relayx --log-level info
+
+# Via environment variable
+LOG_LEVEL=info ./relayx
+
+# Via config.json
+{
+  "log_level": "info"
+}
+```
+
+**Log Output Examples:**
+```
+INFO  Starting RelayX service
+INFO  Log level set to: debug
+INFO  Initializing storage at: "./relayx_db"
+INFO  Storage initialized successfully
+INFO  ✓ RPC server initialized successfully
+INFO  ✓ Server listening on 127.0.0.1:4937
+INFO  === relayer_sendTransaction request received ===
+DEBUG Request details - To: 0x742d..., ChainId: 1, Payment: native
+DEBUG Validating chain support for chainId: 1
+INFO  Transaction simulation successful - Wallet: 0x742d..., Chain: 1, Estimated Gas: 150000
+INFO  ✓ Transaction accepted - ID: abc-123, To: 0x742d..., Chain: 1, Payment: native, Gas: 150000
+```
+
+**Logging Coverage:**
+- **RPC Endpoints**: All endpoints log requests and responses
+- **Storage Operations**: Database operations are traced
+- **Transaction Processing**: Complete transaction lifecycle logging
+- **Simulation**: Detailed simulation and gas estimation logs
+- **Errors**: All errors are logged with context
 
 ## Supported JSON-RPC Methods
 
