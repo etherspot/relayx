@@ -1,9 +1,12 @@
 # syntax=docker/dockerfile:1.6
 
 # -------- Builder stage --------
-FROM rust:1.83-bookworm AS builder
+FROM rust:latest AS builder
 
-# Install native deps for rocksdb, TLS, and sccache
+# Update to nightly for edition2024 support
+RUN rustup default nightly
+
+# Install native deps for rocksdb and TLS
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends \
       build-essential clang pkg-config cmake libclang-dev \
@@ -11,37 +14,30 @@ RUN apt-get update -y \
       librocksdb-dev \
  && rm -rf /var/lib/apt/lists/*
 
-# Install sccache for faster compilation
-RUN cargo install sccache
-
 WORKDIR /app
-
-# Enable sccache
-ENV RUSTC_WRAPPER=sccache
-ENV SCCACHE_DIR=/sccache
-ENV SCCACHE_GHA_ENABLED=true
 
 # Leverage Docker layer caching for dependencies
 # 1) Copy manifests first
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml ./
+# Copy Cargo.lock if it exists, otherwise cargo will generate it
+COPY Cargo.loc[k] ./
 # 2) Create a dummy src to satisfy cargo build deps
 RUN mkdir -p src \
  && echo "fn main() {}" > src/main.rs \
  && mkdir -p src/bin \
  && echo "fn main() {}" > src/bin/dummy.rs
 
-# 3) Prebuild dependencies with sccache
+# 3) Prebuild dependencies
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    --mount=type=cache,target=/sccache \
     cargo build --release
 
 # 4) Now copy the full source and build the actual binary
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    --mount=type=cache,target=/sccache \
-    cargo build --release
+    cargo build --release && \
+    cp /app/target/release/relayx /app/relayx
 
 # -------- Runtime stage --------
 FROM debian:bookworm-slim AS runtime
@@ -55,7 +51,7 @@ RUN apt-get update -y \
 WORKDIR /app
 
 # Copy binary
-COPY --from=builder /app/target/release/relayx /usr/local/bin/relayx
+COPY --from=builder /app/relayx /usr/local/bin/relayx
 
 # Default configuration path; mount or bake your config.json
 ENV RELAYX_CONFIG=/app/config.json \
