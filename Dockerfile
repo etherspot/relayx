@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.6
 
 # -------- Builder stage --------
-FROM rust:latest AS builder
+FROM rust:1.85 AS builder
 
 # Update to nightly for edition2024 support
 RUN rustup default nightly
