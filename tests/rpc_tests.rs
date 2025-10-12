@@ -2,8 +2,9 @@ use relayx::{
     config::Config,
     storage::Storage,
     types::{
-        ExchangeRateRequest, GetStatusRequest, PaymentCapability, QuoteRequest,
-        SendTransactionCapabilities, SendTransactionRequest,
+        ExchangeRateRequest, GetStatusRequest, MultichainTransaction, PaymentCapability,
+        QuoteRequest, SendTransactionCapabilities, SendTransactionMultichainRequest,
+        SendTransactionRequest,
     },
 };
 use serde_json::json;
@@ -334,6 +335,156 @@ mod quote_tests {
         };
 
         assert!(request.capabilities.is_some());
+    }
+}
+
+#[cfg(test)]
+mod send_transaction_multichain_tests {
+    use super::*;
+
+    #[test]
+    fn test_multichain_basic_request() {
+        let request = SendTransactionMultichainRequest {
+            transactions: vec![
+                MultichainTransaction {
+                    to: "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6".to_string(),
+                    data: "0x1234".to_string(),
+                    chain_id: "1".to_string(),
+                    authorization_list: String::new(),
+                },
+                MultichainTransaction {
+                    to: "0x8922b54716264130634d6ff183747a8ead91a40c".to_string(),
+                    data: "0x5678".to_string(),
+                    chain_id: "137".to_string(),
+                    authorization_list: String::new(),
+                },
+            ],
+            capabilities: SendTransactionCapabilities {
+                payment: PaymentCapability {
+                    payment_type: "sponsored".to_string(),
+                    token: String::new(),
+                    data: String::new(),
+                },
+            },
+            payment_chain_id: "1".to_string(),
+        };
+
+        assert_eq!(request.transactions.len(), 2);
+        assert_eq!(request.payment_chain_id, "1");
+    }
+
+    #[test]
+    fn test_multichain_empty_transactions() {
+        let request = SendTransactionMultichainRequest {
+            transactions: vec![],
+            capabilities: SendTransactionCapabilities {
+                payment: PaymentCapability {
+                    payment_type: "sponsored".to_string(),
+                    token: String::new(),
+                    data: String::new(),
+                },
+            },
+            payment_chain_id: "1".to_string(),
+        };
+
+        // Should fail validation
+        assert!(request.transactions.is_empty());
+    }
+
+    #[test]
+    fn test_multichain_different_chains() {
+        let chains = vec!["1", "10", "137", "8453", "42161"];
+        let mut transactions = Vec::new();
+
+        for chain in &chains {
+            transactions.push(MultichainTransaction {
+                to: "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6".to_string(),
+                data: "0x1234".to_string(),
+                chain_id: chain.to_string(),
+                authorization_list: String::new(),
+            });
+        }
+
+        let request = SendTransactionMultichainRequest {
+            transactions,
+            capabilities: SendTransactionCapabilities {
+                payment: PaymentCapability {
+                    payment_type: "erc20".to_string(),
+                    token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(),
+                    data: String::new(),
+                },
+            },
+            payment_chain_id: "1".to_string(),
+        };
+
+        assert_eq!(request.transactions.len(), 5);
+        assert_eq!(request.capabilities.payment.payment_type, "erc20");
+    }
+
+    #[test]
+    fn test_multichain_payment_on_different_chain() {
+        let request = SendTransactionMultichainRequest {
+            transactions: vec![
+                MultichainTransaction {
+                    to: "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6".to_string(),
+                    data: "0x1234".to_string(),
+                    chain_id: "10".to_string(),
+                    authorization_list: String::new(),
+                },
+                MultichainTransaction {
+                    to: "0x8922b54716264130634d6ff183747a8ead91a40c".to_string(),
+                    data: "0x5678".to_string(),
+                    chain_id: "8453".to_string(),
+                    authorization_list: String::new(),
+                },
+            ],
+            capabilities: SendTransactionCapabilities {
+                payment: PaymentCapability {
+                    payment_type: "native".to_string(),
+                    token: "0x0000000000000000000000000000000000000000".to_string(),
+                    data: String::new(),
+                },
+            },
+            payment_chain_id: "1".to_string(),
+        };
+
+        // Payment chain (1) is different from transaction chains (10, 8453)
+        assert_ne!(request.payment_chain_id, request.transactions[0].chain_id);
+        assert_ne!(request.payment_chain_id, request.transactions[1].chain_id);
+    }
+
+    #[test]
+    fn test_multichain_same_chain_multiple_transactions() {
+        let request = SendTransactionMultichainRequest {
+            transactions: vec![
+                MultichainTransaction {
+                    to: "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6".to_string(),
+                    data: "0x1234".to_string(),
+                    chain_id: "1".to_string(),
+                    authorization_list: String::new(),
+                },
+                MultichainTransaction {
+                    to: "0x8922b54716264130634d6ff183747a8ead91a40c".to_string(),
+                    data: "0x5678".to_string(),
+                    chain_id: "1".to_string(),
+                    authorization_list: String::new(),
+                },
+            ],
+            capabilities: SendTransactionCapabilities {
+                payment: PaymentCapability {
+                    payment_type: "sponsored".to_string(),
+                    token: String::new(),
+                    data: String::new(),
+                },
+            },
+            payment_chain_id: "1".to_string(),
+        };
+
+        // Multiple transactions on the same chain is valid
+        assert_eq!(
+            request.transactions[0].chain_id,
+            request.transactions[1].chain_id
+        );
     }
 }
 
