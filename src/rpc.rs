@@ -1,10 +1,13 @@
 use std::net::SocketAddr;
 
 use alloy::{
+    hex,
     json_abi::JsonAbi,
+    network::EthereumWallet,
     primitives::{Address, Bytes},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionRequest,
+    signers::local::PrivateKeySigner,
 };
 use anyhow::Result;
 use chrono::Utc;
@@ -55,6 +58,159 @@ fn load_wallet_abi() -> Result<JsonAbi, anyhow::Error> {
         .map_err(|e| anyhow::anyhow!("Failed to deserialize ABI: {}", e))?;
 
     Ok(abi)
+}
+
+/// Get the relayer's private key from environment variable
+fn get_relayer_private_key() -> Result<String, String> {
+    std::env::var("RELAYX_PRIVATE_KEY")
+        .map_err(|_| "RELAYX_PRIVATE_KEY environment variable not set".to_string())
+}
+
+/// Fetch current gas price from the RPC provider for the given chain
+async fn fetch_gas_price(chain_id: u64, cfg: &Config) -> Result<String, String> {
+    // Get RPC URL for the chain
+    let rpc_url = cfg
+        .rpc_url_for_chain(&chain_id.to_string())
+        .ok_or_else(|| format!("No RPC URL configured for chain {}", chain_id))?;
+
+    // Create provider for the chain
+    let provider = ProviderBuilder::new().on_http(
+        rpc_url
+            .parse()
+            .map_err(|e| format!("Invalid RPC URL: {}", e))?,
+    );
+
+    // Fetch the current gas price
+    match provider.get_gas_price().await {
+        Ok(gas_price) => {
+            let gas_price_hex = format!("0x{:x}", gas_price);
+            tracing::debug!(
+                "Fetched gas price for chain {}: {} ({} wei)",
+                chain_id,
+                gas_price_hex,
+                gas_price
+            );
+            Ok(gas_price_hex)
+        }
+        Err(e) => {
+            let error_msg = format!("Failed to fetch gas price: {}", e);
+            tracing::warn!("{}", error_msg);
+            // Return default gas price on error
+            Ok("0x4a817c800".to_string()) // 20 gwei fallback
+        }
+    }
+}
+
+/// Send a transaction on-chain by calling executeWithRelayer on the wallet
+async fn send_relay_transaction(
+    wallet_address: &str,
+    calldata: &str,
+    chain_id: u64,
+    gas_limit: u64,
+    gas_price_hex: &str,
+    cfg: &Config,
+) -> Result<String, String> {
+    tracing::info!(
+        "Preparing to send relay transaction to wallet {} on chain {}",
+        wallet_address,
+        chain_id
+    );
+
+    // Get private key for signing
+    let private_key = get_relayer_private_key()?;
+    
+    // Parse private key and create signer
+    let signer = private_key
+        .parse::<PrivateKeySigner>()
+        .map_err(|e| format!("Failed to parse private key: {}", e))?;
+    
+    let relayer_address = signer.address();
+    tracing::debug!("Relayer address: 0x{:x}", relayer_address);
+
+    // Create wallet from signer
+    let wallet = EthereumWallet::from(signer);
+
+    // Get RPC URL for the chain
+    let rpc_url = cfg
+        .rpc_url_for_chain(&chain_id.to_string())
+        .ok_or_else(|| format!("No RPC URL configured for chain {}", chain_id))?;
+
+    // Create provider with wallet for signing
+    let provider = ProviderBuilder::new()
+        .with_recommended_fillers()
+        .wallet(wallet)
+        .on_http(
+            rpc_url
+                .parse()
+                .map_err(|e| format!("Invalid RPC URL: {}", e))?,
+        );
+
+    // Parse wallet address
+    let to_address: Address = wallet_address
+        .parse()
+        .map_err(|e| format!("Invalid wallet address: {}", e))?;
+
+    // Parse calldata (should already be hex encoded)
+    let calldata_bytes = if calldata.starts_with("0x") {
+        hex::decode(&calldata[2..]).map_err(|e| format!("Invalid calldata hex: {}", e))?
+    } else {
+        hex::decode(calldata).map_err(|e| format!("Invalid calldata hex: {}", e))?
+    };
+
+    // Parse gas price
+    let gas_price_value = if gas_price_hex.starts_with("0x") {
+        u128::from_str_radix(&gas_price_hex[2..], 16)
+            .map_err(|e| format!("Invalid gas price hex: {}", e))?
+    } else {
+        u128::from_str_radix(gas_price_hex, 16)
+            .map_err(|e| format!("Invalid gas price hex: {}", e))?
+    };
+
+    // Get nonce for the relayer address
+    let nonce = provider
+        .get_transaction_count(relayer_address)
+        .await
+        .map_err(|e| format!("Failed to get nonce: {}", e))?;
+
+    tracing::debug!(
+        "Building transaction - Nonce: {}, Gas limit: {}, Gas price: {} wei",
+        nonce,
+        gas_limit,
+        gas_price_value
+    );
+
+    // Build transaction
+    let mut tx = TransactionRequest::default()
+        .to(to_address)
+        .input(calldata_bytes.into())
+        .gas_limit(gas_limit);
+    
+    tx.nonce = Some(nonce);
+    tx.gas_price = Some(gas_price_value);
+    tx.chain_id = Some(chain_id);
+
+    tracing::info!("Sending transaction to chain {}...", chain_id);
+
+    // Send transaction
+    match provider.send_transaction(tx).await {
+        Ok(pending_tx) => {
+            let tx_hash = *pending_tx.tx_hash();
+            let tx_hash_hex = format!("0x{:x}", tx_hash);
+            
+            tracing::info!(
+                "✓ Transaction sent successfully - Hash: {}, Chain: {}",
+                tx_hash_hex,
+                chain_id
+            );
+            
+            Ok(tx_hash_hex)
+        }
+        Err(e) => {
+            let error_msg = format!("Failed to send transaction: {}", e);
+            tracing::error!("{}", error_msg);
+            Err(error_msg)
+        }
+    }
 }
 
 /// Simulate a transaction and estimate gas consumption
@@ -202,16 +358,22 @@ async fn process_send_transaction(
 
     tracing::debug!("Chain {} is supported", chain_id);
 
-    // Default gas limit, will be updated by simulation if applicable
-    let mut gas_limit: u64 = 21000;
+    // Fetch current gas price from the chain
+    let gas_price = match fetch_gas_price(chain_id, cfg).await {
+        Ok(price) => price,
+        Err(e) => {
+            tracing::warn!("Failed to fetch gas price, using default: {}", e);
+            "0x4a817c800".to_string() // 20 gwei fallback
+        }
+    };
 
     tracing::debug!(
         "Validating payment capability: {}",
         input.capabilities.payment.payment_type
     );
 
-    // Validate payment capability
-    match input.capabilities.payment.payment_type.as_str() {
+    // Validate payment capability and estimate gas
+    let gas_limit = match input.capabilities.payment.payment_type.as_str() {
         "native" => {
             tracing::debug!("Processing native payment transaction");
 
@@ -227,7 +389,7 @@ async fn process_send_transaction(
             }
 
             // Simulate transaction to ensure it will succeed and get gas estimate
-            gas_limit = match simulate_transaction(&input.to, &input.data, chain_id, cfg).await {
+            let gas = match simulate_transaction(&input.to, &input.data, chain_id, cfg).await {
                 Ok(gas) => gas,
                 Err(e) => {
                     tracing::error!(
@@ -247,8 +409,9 @@ async fn process_send_transaction(
                 "Transaction simulation successful - Wallet: {}, Chain: {}, Estimated Gas: {}",
                 input.to,
                 chain_id,
-                gas_limit
+                gas
             );
+            gas
         }
         "erc20" => {
             tracing::debug!(
@@ -270,10 +433,39 @@ async fn process_send_transaction(
             }
 
             tracing::debug!("ERC20 token address validated successfully");
+            
+            // Estimate gas for ERC20 transactions as well
+            match simulate_transaction(&input.to, &input.data, chain_id, cfg).await {
+                Ok(gas) => {
+                    tracing::info!("ERC20 transaction gas estimate: {}", gas);
+                    gas
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "ERC20 transaction simulation failed, using default gas limit: {}",
+                        e
+                    );
+                    21000 // Use default if simulation fails
+                }
+            }
         }
         "sponsored" => {
             tracing::debug!("Processing sponsored transaction");
-            // Sponsored transactions don't require additional validation
+            
+            // Estimate gas for sponsored transactions as well
+            match simulate_transaction(&input.to, &input.data, chain_id, cfg).await {
+                Ok(gas) => {
+                    tracing::info!("Sponsored transaction gas estimate: {}", gas);
+                    gas
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Sponsored transaction simulation failed, using default gas limit: {}",
+                        e
+                    );
+                    21000 // Use default if simulation fails
+                }
+            }
         }
         _ => {
             tracing::warn!(
@@ -285,22 +477,33 @@ async fn process_send_transaction(
                 input.capabilities.payment.payment_type
             )));
         }
-    }
+    };
+
+    // Get fee collector address from config
+    let fee_collector = std::env::var("RELAYX_FEE_COLLECTOR")
+        .ok()
+        .or_else(|| cfg.fee_collector())
+        .unwrap_or_else(|| "0x55f3a93f544e01ce4378d25e927d7c493b863bd6".to_string());
 
     // Generate a unique transaction ID
     let transaction_id = Uuid::new_v4().to_string();
 
     tracing::info!("Generated transaction ID: {}", transaction_id);
-    tracing::debug!("Creating relayer request with gas_limit: {}", gas_limit);
+    tracing::debug!(
+        "Creating relayer request - Gas limit: {}, Gas price: {}, Fee collector: {}",
+        gas_limit,
+        gas_price,
+        fee_collector
+    );
 
     // Create a relayer request record
     let relayer_request = RelayerRequest {
         id: Uuid::parse_str(&transaction_id).unwrap(),
-        from_address: "0x0000000000000000000000000000000000000000".to_string(), /* Will be filled from signature */
+        from_address: fee_collector.clone(), // Use fee collector as sender address
         to_address: input.to.clone(),
         amount: "0".to_string(), // Will be calculated based on transaction
-        gas_limit,               // Gas limit from simulation or default
-        gas_price: "0x4a817c800".to_string(), // 20 gwei
+        gas_limit,               // Gas limit from simulation
+        gas_price: gas_price.clone(), // Dynamic gas price from RPC
         data: Some(input.data.clone()),
         nonce: 0, // Will be fetched from chain
         chain_id,
@@ -312,7 +515,7 @@ async fn process_send_transaction(
 
     // Store the request in storage
     tracing::debug!("Storing transaction request in database");
-    if let Err(e) = storage.create_request(relayer_request).await {
+    if let Err(e) = storage.create_request(relayer_request.clone()).await {
         tracing::error!("Failed to store transaction request: {}", e);
         return Err(jsonrpc_core::Error::internal_error());
     }
@@ -328,6 +531,64 @@ async fn process_send_transaction(
         input.capabilities.payment.payment_type,
         gas_limit
     );
+
+    // Send the transaction on-chain
+    tracing::info!("Sending relay transaction on-chain...");
+    match send_relay_transaction(
+        &input.to,
+        &input.data,
+        chain_id,
+        gas_limit,
+        &gas_price,
+        cfg,
+    )
+    .await
+    {
+        Ok(tx_hash) => {
+            tracing::info!(
+                "✓ Relay transaction sent successfully - TX Hash: {}, ID: {}",
+                tx_hash,
+                transaction_id
+            );
+
+            // Update storage with transaction hash and set status to Processing
+            let mut updated_request = relayer_request;
+            updated_request.status = RequestStatus::Processing;
+            // Note: We'd need to add a tx_hash field to RelayerRequest to store this
+            // For now, we'll just update the status
+
+            if let Err(e) = storage
+                .update_request_status(updated_request.id, RequestStatus::Processing, None)
+                .await
+            {
+                tracing::warn!("Failed to update request status to Processing: {}", e);
+            }
+
+            tracing::info!(
+                "✓ Transaction relay complete - TX Hash: {}, ID: {}, Chain: {}",
+                tx_hash,
+                transaction_id,
+                chain_id
+            );
+        }
+        Err(e) => {
+            tracing::error!(
+                "Failed to send relay transaction for ID {}: {}",
+                transaction_id,
+                e
+            );
+
+            // Update storage with error status
+            if let Err(update_err) = storage
+                .update_request_status(relayer_request.id, RequestStatus::Failed, Some(e.clone()))
+                .await
+            {
+                tracing::error!("Failed to update request status to Failed: {}", update_err);
+            }
+
+            return Err(jsonrpc_core::Error::internal_error());
+        }
+    }
 
     // Return the response with the generated transaction ID
     Ok(SendTransactionResponse {
@@ -428,6 +689,12 @@ async fn process_send_transaction_multichain(
         }
     }
 
+    // Get fee collector address from config (shared across all transactions)
+    let fee_collector = std::env::var("RELAYX_FEE_COLLECTOR")
+        .ok()
+        .or_else(|| cfg.fee_collector())
+        .unwrap_or_else(|| "0x55f3a93f544e01ce4378d25e927d7c493b863bd6".to_string());
+
     let mut results = Vec::new();
 
     // Process each transaction
@@ -482,23 +749,55 @@ async fn process_send_transaction_multichain(
             )));
         }
 
+        // Fetch current gas price from the chain for this transaction
+        let gas_price = match fetch_gas_price(chain_id, cfg).await {
+            Ok(price) => price,
+            Err(e) => {
+                tracing::warn!(
+                    "Transaction {}: Failed to fetch gas price, using default: {}",
+                    idx,
+                    e
+                );
+                "0x4a817c800".to_string() // 20 gwei fallback
+            }
+        };
+
+        // Estimate gas limit for this transaction
+        let gas_limit = match simulate_transaction(&tx.to, &tx.data, chain_id, cfg).await {
+            Ok(gas) => {
+                tracing::debug!("Transaction {}: Estimated gas: {}", idx, gas);
+                gas
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Transaction {}: Simulation failed, using default gas limit: {}",
+                    idx,
+                    e
+                );
+                21000 // Use default if simulation fails
+            }
+        };
+
         // Generate unique transaction ID
         let transaction_id = Uuid::new_v4().to_string();
 
         tracing::info!(
-            "Generated transaction ID for chain {}: {}",
+            "Transaction {}: Generated ID {} for chain {} (gas: {}, gasPrice: {})",
+            idx,
+            transaction_id,
             chain_id,
-            transaction_id
+            gas_limit,
+            gas_price
         );
 
         // Create relayer request record
         let relayer_request = RelayerRequest {
             id: Uuid::parse_str(&transaction_id).unwrap(),
-            from_address: "0x0000000000000000000000000000000000000000".to_string(),
+            from_address: fee_collector.clone(), // Use fee collector as sender address
             to_address: tx.to.clone(),
             amount: "0".to_string(),
-            gas_limit: 21000,
-            gas_price: "0x4a817c800".to_string(),
+            gas_limit, // Dynamic gas limit from simulation
+            gas_price, // Dynamic gas price from RPC
             data: Some(tx.data.clone()),
             nonce: 0,
             chain_id,
