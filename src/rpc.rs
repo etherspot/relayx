@@ -118,12 +118,12 @@ async fn send_relay_transaction(
 
     // Get private key for signing
     let private_key = get_relayer_private_key()?;
-    
+
     // Parse private key and create signer
     let signer = private_key
         .parse::<PrivateKeySigner>()
         .map_err(|e| format!("Failed to parse private key: {}", e))?;
-    
+
     let relayer_address = signer.address();
     tracing::debug!("Relayer address: 0x{:x}", relayer_address);
 
@@ -151,16 +151,15 @@ async fn send_relay_transaction(
         .map_err(|e| format!("Invalid wallet address: {}", e))?;
 
     // Parse calldata (should already be hex encoded)
-    let calldata_bytes = if calldata.starts_with("0x") {
-        hex::decode(&calldata[2..]).map_err(|e| format!("Invalid calldata hex: {}", e))?
+    let calldata_bytes = if let Some(stripped) = calldata.strip_prefix("0x") {
+        hex::decode(stripped).map_err(|e| format!("Invalid calldata hex: {}", e))?
     } else {
         hex::decode(calldata).map_err(|e| format!("Invalid calldata hex: {}", e))?
     };
 
     // Parse gas price
-    let gas_price_value = if gas_price_hex.starts_with("0x") {
-        u128::from_str_radix(&gas_price_hex[2..], 16)
-            .map_err(|e| format!("Invalid gas price hex: {}", e))?
+    let gas_price_value = if let Some(stripped) = gas_price_hex.strip_prefix("0x") {
+        u128::from_str_radix(stripped, 16).map_err(|e| format!("Invalid gas price hex: {}", e))?
     } else {
         u128::from_str_radix(gas_price_hex, 16)
             .map_err(|e| format!("Invalid gas price hex: {}", e))?
@@ -184,7 +183,7 @@ async fn send_relay_transaction(
         .to(to_address)
         .input(calldata_bytes.into())
         .gas_limit(gas_limit);
-    
+
     tx.nonce = Some(nonce);
     tx.gas_price = Some(gas_price_value);
     tx.chain_id = Some(chain_id);
@@ -196,13 +195,13 @@ async fn send_relay_transaction(
         Ok(pending_tx) => {
             let tx_hash = *pending_tx.tx_hash();
             let tx_hash_hex = format!("0x{:x}", tx_hash);
-            
+
             tracing::info!(
                 "✓ Transaction sent successfully - Hash: {}, Chain: {}",
                 tx_hash_hex,
                 chain_id
             );
-            
+
             Ok(tx_hash_hex)
         }
         Err(e) => {
@@ -433,7 +432,7 @@ async fn process_send_transaction(
             }
 
             tracing::debug!("ERC20 token address validated successfully");
-            
+
             // Estimate gas for ERC20 transactions as well
             match simulate_transaction(&input.to, &input.data, chain_id, cfg).await {
                 Ok(gas) => {
@@ -451,7 +450,7 @@ async fn process_send_transaction(
         }
         "sponsored" => {
             tracing::debug!("Processing sponsored transaction");
-            
+
             // Estimate gas for sponsored transactions as well
             match simulate_transaction(&input.to, &input.data, chain_id, cfg).await {
                 Ok(gas) => {
@@ -534,15 +533,7 @@ async fn process_send_transaction(
 
     // Send the transaction on-chain
     tracing::info!("Sending relay transaction on-chain...");
-    match send_relay_transaction(
-        &input.to,
-        &input.data,
-        chain_id,
-        gas_limit,
-        &gas_price,
-        cfg,
-    )
-    .await
+    match send_relay_transaction(&input.to, &input.data, chain_id, gas_limit, &gas_price, cfg).await
     {
         Ok(tx_hash) => {
             tracing::info!(
@@ -1191,7 +1182,8 @@ impl RpcServer {
                         jsonrpc_core::Error::invalid_params("missing params: expected one object")
                     })?;
 
-                    let response = process_send_transaction_multichain(storage, input, &cfg).await?;
+                    let response =
+                        process_send_transaction_multichain(storage, input, &cfg).await?;
                     serde_json::to_value(response)
                         .map_err(|_| jsonrpc_core::Error::internal_error())
                 }

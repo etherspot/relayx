@@ -481,7 +481,10 @@ mod send_transaction_multichain_tests {
         };
 
         // Multiple transactions on the same chain is valid
-        assert_eq!(request.transactions[0].chain_id, request.transactions[1].chain_id);
+        assert_eq!(
+            request.transactions[0].chain_id,
+            request.transactions[1].chain_id
+        );
     }
 }
 
