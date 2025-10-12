@@ -131,6 +131,38 @@ pub struct SendTransactionResponse {
     pub result: Vec<SendTransactionResult>,
 }
 
+// ===== relayer_sendTransactionMultichain =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultichainTransaction {
+    pub to: String,
+    pub data: String,
+    #[serde(rename = "chainId")]
+    pub chain_id: String,
+    #[serde(rename = "authorizationList")]
+    pub authorization_list: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendTransactionMultichainRequest {
+    pub transactions: Vec<MultichainTransaction>,
+    pub capabilities: SendTransactionCapabilities,
+    #[serde(rename = "paymentChainId")]
+    pub payment_chain_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultichainTransactionResult {
+    #[serde(rename = "chainId")]
+    pub chain_id: String,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendTransactionMultichainResponse {
+    pub result: Vec<MultichainTransactionResult>,
+}
+
 // ===== relayer_getStatus =====
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

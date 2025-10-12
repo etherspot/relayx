@@ -18,10 +18,12 @@ use crate::{
     types::{
         Capabilities, Erc20Payment, ExchangeRateQuote, ExchangeRateRequest, ExchangeRateResponse,
         ExchangeRateResultItem, ExchangeRateSuccess, GetCapabilitiesResponse, GetStatusRequest,
-        GetStatusResponse, HealthResponse, Log, NativePayment, OffchainFailure, OnchainFailure,
-        Payment, PaymentType, QuoteInner, QuoteRequest, QuoteResponse, Receipt, RelayerCall,
-        RelayerRequest, RequestStatus, Resubmission, SendTransactionRequest,
-        SendTransactionResponse, SendTransactionResult, SponsoredPayment, StatusResult, TokenInfo,
+        GetStatusResponse, HealthResponse, Log, MultichainTransactionResult, NativePayment,
+        OffchainFailure, OnchainFailure, Payment, PaymentType, QuoteInner, QuoteRequest,
+        QuoteResponse, Receipt, RelayerCall, RelayerRequest, RequestStatus, Resubmission,
+        SendTransactionMultichainRequest, SendTransactionMultichainResponse,
+        SendTransactionRequest, SendTransactionResponse, SendTransactionResult, SponsoredPayment,
+        StatusResult, TokenInfo,
     },
 };
 
@@ -334,6 +336,201 @@ async fn process_send_transaction(
             id: transaction_id,
         }],
     })
+}
+
+/// Process multichain transaction request
+async fn process_send_transaction_multichain(
+    storage: Storage,
+    input: &SendTransactionMultichainRequest,
+    cfg: &Config,
+) -> Result<SendTransactionMultichainResponse, jsonrpc_core::Error> {
+    tracing::info!("=== relayer_sendTransactionMultichain request received ===");
+    tracing::debug!(
+        "Request details - Transactions: {}, PaymentChainId: {}, Payment: {}",
+        input.transactions.len(),
+        input.payment_chain_id,
+        input.capabilities.payment.payment_type
+    );
+
+    // Validate that we have at least one transaction
+    if input.transactions.is_empty() {
+        tracing::warn!("Validation failed: No transactions provided");
+        return Err(jsonrpc_core::Error::invalid_params(
+            "At least one transaction is required",
+        ));
+    }
+
+    // Validate payment chain ID
+    if input.payment_chain_id.is_empty() {
+        tracing::warn!("Validation failed: Missing 'paymentChainId' field");
+        return Err(jsonrpc_core::Error::invalid_params(
+            "Missing required field: 'paymentChainId'",
+        ));
+    }
+
+    let payment_chain_id: u64 = input.payment_chain_id.parse().map_err(|_| {
+        tracing::warn!("Invalid paymentChainId format: {}", input.payment_chain_id);
+        jsonrpc_core::Error::invalid_params("Invalid paymentChainId: must be a valid number")
+    })?;
+
+    // Validate payment chain is supported
+    if !cfg.is_chain_supported(payment_chain_id) {
+        tracing::warn!("Unsupported payment chain ID: {}", payment_chain_id);
+        return Err(jsonrpc_core::Error::invalid_params(format!(
+            "Unsupported payment chain ID: {}",
+            payment_chain_id
+        )));
+    }
+
+    tracing::debug!(
+        "Validating payment capability: {}",
+        input.capabilities.payment.payment_type
+    );
+
+    // Validate payment capability
+    match input.capabilities.payment.payment_type.as_str() {
+        "native" => {
+            if input.capabilities.payment.token != "0x0000000000000000000000000000000000000000" {
+                tracing::warn!(
+                    "Invalid native payment token address: {}",
+                    input.capabilities.payment.token
+                );
+                return Err(jsonrpc_core::Error::invalid_params(
+                    "Invalid native payment token address",
+                ));
+            }
+        }
+        "erc20" => {
+            if !input.capabilities.payment.token.starts_with("0x")
+                || input.capabilities.payment.token.len() != 42
+            {
+                tracing::warn!(
+                    "Invalid ERC20 token address format: {}",
+                    input.capabilities.payment.token
+                );
+                return Err(jsonrpc_core::Error::invalid_params(
+                    "Invalid ERC20 token address format",
+                ));
+            }
+        }
+        "sponsored" => {
+            tracing::debug!("Processing sponsored multichain transaction");
+        }
+        _ => {
+            tracing::warn!(
+                "Unsupported payment type: {}",
+                input.capabilities.payment.payment_type
+            );
+            return Err(jsonrpc_core::Error::invalid_params(format!(
+                "Unsupported payment type: {}",
+                input.capabilities.payment.payment_type
+            )));
+        }
+    }
+
+    let mut results = Vec::new();
+
+    // Process each transaction
+    for (idx, tx) in input.transactions.iter().enumerate() {
+        tracing::debug!(
+            "Processing transaction {} of {}: ChainId: {}, To: {}",
+            idx + 1,
+            input.transactions.len(),
+            tx.chain_id,
+            tx.to
+        );
+
+        // Validate transaction fields
+        if tx.to.is_empty() {
+            tracing::warn!("Transaction {} missing 'to' field", idx);
+            return Err(jsonrpc_core::Error::invalid_params(format!(
+                "Transaction {}: Missing required field: 'to'",
+                idx
+            )));
+        }
+
+        if tx.data.is_empty() {
+            tracing::warn!("Transaction {} missing 'data' field", idx);
+            return Err(jsonrpc_core::Error::invalid_params(format!(
+                "Transaction {}: Missing required field: 'data'",
+                idx
+            )));
+        }
+
+        if tx.chain_id.is_empty() {
+            tracing::warn!("Transaction {} missing 'chainId' field", idx);
+            return Err(jsonrpc_core::Error::invalid_params(format!(
+                "Transaction {}: Missing required field: 'chainId'",
+                idx
+            )));
+        }
+
+        // Validate chain ID format and support
+        let chain_id: u64 = tx.chain_id.parse().map_err(|_| {
+            tracing::warn!("Transaction {} invalid chainId: {}", idx, tx.chain_id);
+            jsonrpc_core::Error::invalid_params(format!(
+                "Transaction {}: Invalid chainId format",
+                idx
+            ))
+        })?;
+
+        if !cfg.is_chain_supported(chain_id) {
+            tracing::warn!("Transaction {} unsupported chain: {}", idx, chain_id);
+            return Err(jsonrpc_core::Error::invalid_params(format!(
+                "Transaction {}: Unsupported chain ID: {}",
+                idx, chain_id
+            )));
+        }
+
+        // Generate unique transaction ID
+        let transaction_id = Uuid::new_v4().to_string();
+
+        tracing::info!(
+            "Generated transaction ID for chain {}: {}",
+            chain_id,
+            transaction_id
+        );
+
+        // Create relayer request record
+        let relayer_request = RelayerRequest {
+            id: Uuid::parse_str(&transaction_id).unwrap(),
+            from_address: "0x0000000000000000000000000000000000000000".to_string(),
+            to_address: tx.to.clone(),
+            amount: "0".to_string(),
+            gas_limit: 21000,
+            gas_price: "0x4a817c800".to_string(),
+            data: Some(tx.data.clone()),
+            nonce: 0,
+            chain_id,
+            status: RequestStatus::Pending,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            error_message: None,
+        };
+
+        // Store the request
+        if let Err(e) = storage.create_request(relayer_request).await {
+            tracing::error!("Failed to store transaction {} request: {}", idx, e);
+            return Err(jsonrpc_core::Error::internal_error());
+        }
+
+        tracing::debug!("Transaction {} stored successfully", idx);
+
+        // Add to results
+        results.push(MultichainTransactionResult {
+            chain_id: tx.chain_id.clone(),
+            id: transaction_id,
+        });
+    }
+
+    tracing::info!(
+        "✓ Multichain transaction accepted - {} transaction(s) across {} chain(s), Payment chain: {}",
+        results.len(),
+        input.transactions.iter().map(|t| &t.chain_id).collect::<std::collections::HashSet<_>>().len(),
+        input.payment_chain_id
+    );
+
+    Ok(SendTransactionMultichainResponse { result: results })
 }
 
 async fn process_get_status(
@@ -677,6 +874,31 @@ impl RpcServer {
             }
         });
 
+        // Endpoint 1b: relayer_sendTransactionMultichain
+        tracing::debug!("Registering endpoint: relayer_sendTransactionMultichain");
+        let storage1b = self.storage.clone();
+        let cfg1b = self.config.clone();
+        io.add_method(
+            "relayer_sendTransactionMultichain",
+            move |params: Params| {
+                let storage = storage1b.clone();
+                let cfg = cfg1b.clone();
+
+                async move {
+                    let inputs: Vec<SendTransactionMultichainRequest> = params
+                        .parse::<Vec<SendTransactionMultichainRequest>>()
+                        .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
+                    let input = inputs.first().ok_or_else(|| {
+                        jsonrpc_core::Error::invalid_params("missing params: expected one object")
+                    })?;
+
+                    let response = process_send_transaction_multichain(storage, input, &cfg).await?;
+                    serde_json::to_value(response)
+                        .map_err(|_| jsonrpc_core::Error::internal_error())
+                }
+            },
+        );
+
         // Endpoint 2: relayer_getStatus
         tracing::debug!("Registering endpoint: relayer_getStatus");
         let storage2 = self.storage.clone();
@@ -774,6 +996,7 @@ impl RpcServer {
         tracing::info!("✓ JSON-RPC server listening on {}", socket_addr);
         tracing::info!("Available endpoints:");
         tracing::info!("  - relayer_sendTransaction");
+        tracing::info!("  - relayer_sendTransactionMultichain");
         tracing::info!("  - relayer_getStatus");
         tracing::info!("  - relayer_getCapabilities");
         tracing::info!("  - relayer_getExchangeRate");
