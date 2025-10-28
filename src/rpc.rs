@@ -1219,6 +1219,7 @@ async fn build_exchange_rate_response(
 }
 
 /// Build a response for the relayer_getStatus endpoint
+#[allow(dead_code)]
 fn build_get_status_response(_req: &GetStatusRequest) -> GetStatusResponse {
     GetStatusResponse {
 		result: vec![StatusResult {
@@ -1258,6 +1259,7 @@ fn build_get_status_response(_req: &GetStatusRequest) -> GetStatusResponse {
 
 // Build a response for the relayer_sendTransaction endpoint (removed unused builder)
 /// Build a response for the relayer_getQuote endpoint
+#[allow(dead_code)]
 fn build_quote_response() -> QuoteResponse {
     QuoteResponse {
 		quote: QuoteInner {
