@@ -1,7 +1,8 @@
 /// Example client to test the relayer_getCapabilities endpoint
 /// This demonstrates how to call the new endpoint and parse the response
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = reqwest::blocking::Client::new();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
 
     // JSON-RPC request payload for relayer_getCapabilities
     let request_body = serde_json::json!({
@@ -19,12 +20,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .post("http://127.0.0.1:4937")
         .header("Content-Type", "application/json")
         .body(serde_json::to_string(&request_body)?)
-        .send()?;
+        .send()
+        .await?;
 
     let status = response.status();
     println!("Response status: {}", status);
 
-    let response_text = response.text()?;
+    let response_text = response.text().await?;
     println!("Response body: {}", response_text);
 
     // Parse the response to demonstrate the structure
