@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 alloy = { version = "0.6", features = ["full", "node-bindings", "rpc-types-eth"] }
+alloy-dyn-abi = "0.8.26"
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.0", features = ["derive", "env"] }
@@ -18,8 +19,8 @@ tokio = { version = "1.0", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
-reqwest = { version = "0.11", features = ["json", "blocking"] }
 tempfile = "3.8"
 

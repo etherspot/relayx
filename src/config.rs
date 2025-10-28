@@ -244,4 +244,40 @@ impl Config {
             })
             .unwrap_or_else(|| self.log_level.clone())
     }
+
+    /// Returns the configured Etherscan API key if present in the JSON file.
+    /// Supports either top-level `etherscanApiKey` in config.json or `ETHERSCAN_API_KEY` env var.
+    pub fn etherscan_api_key(&self) -> Option<String> {
+        // First check environment variable
+        if let Ok(key) = std::env::var("ETHERSCAN_API_KEY") {
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
+
+        // Then check config file
+        let root = self.get_json_config()?;
+        root.get("etherscanApiKey")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    }
+
+    /// Returns the configured Etherscan API base URL if present.
+    /// Supports `ETHERSCAN_API_BASE` env var or `etherscanApiBase` in config.json.
+    /// Defaults to "https://api.etherscan.io/v2/api".
+    pub fn etherscan_api_base(&self) -> String {
+        if let Ok(base) = std::env::var("ETHERSCAN_API_BASE") {
+            if !base.is_empty() {
+                return base;
+            }
+        }
+        self.get_json_config()
+            .and_then(|v| {
+                v.get("etherscanApiBase")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| "https://api.etherscan.io/v2/api".to_string())
+    }
 }

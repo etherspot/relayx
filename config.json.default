@@ -5,6 +5,8 @@
   "http_cors": "*",
   "log_level": "debug",
   "defaultToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "etherscanApiKey": "",
+  "etherscanApiBase": "https://api.etherscan.io/v2/api",
   "rpcs": {
     "1": "https://ethereum.publicnode.com",
     "10": "https://mainnet.optimism.io",
