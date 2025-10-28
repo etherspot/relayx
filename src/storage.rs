@@ -175,7 +175,10 @@ impl Storage {
 
     /// Record a resubmission attempt for a request
     pub async fn add_resubmission(&self, request_id: Uuid, resub: &Resubmission) -> Result<()> {
-        let key = format!("resubmission:{}:{}:{}", request_id, resub.chain_id, resub.transaction_hash);
+        let key = format!(
+            "resubmission:{}:{}:{}",
+            request_id, resub.chain_id, resub.transaction_hash
+        );
         let value = serde_json::to_string(resub)?;
         self.db.put(key.as_bytes(), value.as_bytes())?;
         Ok(())
@@ -185,13 +188,16 @@ impl Storage {
     pub async fn get_resubmissions(&self, request_id: Uuid) -> Result<Vec<Resubmission>> {
         let mut items = Vec::new();
         let prefix = format!("resubmission:{}:", request_id);
-        let iter = self
-            .db
-            .iterator(rocksdb::IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Forward));
+        let iter = self.db.iterator(rocksdb::IteratorMode::From(
+            prefix.as_bytes(),
+            rocksdb::Direction::Forward,
+        ));
         for result in iter {
             let (key, value) = result?;
             let key_str = String::from_utf8_lossy(&key);
-            if !key_str.starts_with(&prefix) { break; }
+            if !key_str.starts_with(&prefix) {
+                break;
+            }
             if let Ok(resub) = serde_json::from_slice::<Resubmission>(&value) {
                 items.push(resub);
             }

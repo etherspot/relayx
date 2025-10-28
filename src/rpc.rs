@@ -13,21 +13,21 @@ use anyhow::Result;
 use chrono::Utc;
 use jsonrpc_core::{IoHandler, Params};
 use jsonrpc_http_server::ServerBuilder;
-use uuid::Uuid;
 use tokio::time::{sleep, Duration};
+use uuid::Uuid;
 
 use crate::{
     config::Config,
     storage::Storage,
     types::{
-        Capabilities, Erc20Payment, ExchangeRateError, ExchangeRateErrorBody, ExchangeRateQuote, ExchangeRateRequest, ExchangeRateResponse,
-        ExchangeRateResultItem, ExchangeRateSuccess, GetCapabilitiesResponse, GetStatusRequest,
-        GetStatusResponse, HealthResponse, Log, MultichainTransactionResult, NativePayment,
-        OffchainFailure, OnchainFailure, Payment, PaymentType, QuoteInner, QuoteRequest,
-        QuoteResponse, Receipt, RelayerCall, RelayerRequest, RequestStatus, Resubmission,
-        SendTransactionMultichainRequest, SendTransactionMultichainResponse,
-        SendTransactionRequest, SendTransactionResponse, SendTransactionResult, SponsoredPayment,
-        StatusResult, TokenInfo,
+        Capabilities, Erc20Payment, ExchangeRateError, ExchangeRateErrorBody, ExchangeRateQuote,
+        ExchangeRateRequest, ExchangeRateResponse, ExchangeRateResultItem, ExchangeRateSuccess,
+        GetCapabilitiesResponse, GetStatusRequest, GetStatusResponse, HealthResponse, Log,
+        MultichainTransactionResult, NativePayment, OffchainFailure, OnchainFailure, Payment,
+        PaymentType, QuoteInner, QuoteRequest, QuoteResponse, Receipt, RelayerCall, RelayerRequest,
+        RequestStatus, Resubmission, SendTransactionMultichainRequest,
+        SendTransactionMultichainResponse, SendTransactionRequest, SendTransactionResponse,
+        SendTransactionResult, SponsoredPayment, StatusResult, TokenInfo,
     },
 };
 
@@ -84,12 +84,15 @@ async fn fetch_gas_price(chain_id: u64, cfg: &Config) -> Result<String, String> 
                     if json.get("status").and_then(|s| s.as_str()) == Some("1") {
                         if let Some(result) = json.get("result") {
                             // Prefer ProposeGasPrice; values are in Gwei (string floats)
-                            if let Some(p) = result.get("ProposeGasPrice").and_then(|v| v.as_str()) {
+                            if let Some(p) = result.get("ProposeGasPrice").and_then(|v| v.as_str())
+                            {
                                 if let Ok(gwei_float) = p.parse::<f64>() {
                                     let wei = (gwei_float * 1e9_f64) as u128;
                                     tracing::debug!(
                                         "Etherscan gas price for chain {}: {} gwei ({} wei)",
-                                        chain_id, gwei_float, wei
+                                        chain_id,
+                                        gwei_float,
+                                        wei
                                     );
                                     return Ok(format!("0x{:x}", wei));
                                 }
@@ -583,7 +586,16 @@ async fn process_send_transaction(
 
     // Send the transaction on-chain
     tracing::info!("Sending relay transaction on-chain...");
-    match send_relay_transaction(&input.to, &input.data, chain_id, gas_limit, &gas_price, cfg).await {
+    match send_relay_transaction(
+        &input.to,
+        &input.data,
+        chain_id,
+        gas_limit,
+        &gas_price,
+        cfg,
+    )
+    .await
+    {
         Ok(tx_hash) => {
             tracing::info!(
                 "✓ Relay transaction sent successfully - TX Hash: {}, ID: {}",
@@ -596,11 +608,17 @@ async fn process_send_transaction(
             updated_request.status = RequestStatus::Processing;
 
             // store tx hash
-            if let Err(e) = storage.update_request_tx_hash(updated_request.id, tx_hash.clone()).await {
+            if let Err(e) = storage
+                .update_request_tx_hash(updated_request.id, tx_hash.clone())
+                .await
+            {
                 tracing::warn!("Failed to store tx hash: {}", e);
             }
 
-            if let Err(e) = storage.update_request_status(updated_request.id, RequestStatus::Processing, None).await {
+            if let Err(e) = storage
+                .update_request_status(updated_request.id, RequestStatus::Processing, None)
+                .await
+            {
                 tracing::warn!("Failed to update request status to Processing: {}", e);
             }
 
@@ -861,19 +879,38 @@ async fn process_send_transaction_multichain(
             Ok(tx_hash) => {
                 tracing::info!(
                     "✓ Multichain relay sent - idx: {}, TX Hash: {}, ID: {}",
-                    idx, tx_hash, transaction_id
+                    idx,
+                    tx_hash,
+                    transaction_id
                 );
                 // store tx hash and set Processing
-                if let Err(e) = storage.update_request_tx_hash(Uuid::parse_str(&transaction_id).unwrap(), tx_hash).await {
+                if let Err(e) = storage
+                    .update_request_tx_hash(Uuid::parse_str(&transaction_id).unwrap(), tx_hash)
+                    .await
+                {
                     tracing::warn!("Transaction {}: failed to store tx hash: {}", idx, e);
                 }
-                if let Err(e) = storage.update_request_status(Uuid::parse_str(&transaction_id).unwrap(), RequestStatus::Processing, None).await {
+                if let Err(e) = storage
+                    .update_request_status(
+                        Uuid::parse_str(&transaction_id).unwrap(),
+                        RequestStatus::Processing,
+                        None,
+                    )
+                    .await
+                {
                     tracing::warn!("Transaction {}: failed to set Processing: {}", idx, e);
                 }
             }
             Err(e) => {
                 tracing::error!("Transaction {}: failed to send: {}", idx, e);
-                if let Err(update_err) = storage.update_request_status(Uuid::parse_str(&transaction_id).unwrap(), RequestStatus::Failed, Some(e.clone())).await {
+                if let Err(update_err) = storage
+                    .update_request_status(
+                        Uuid::parse_str(&transaction_id).unwrap(),
+                        RequestStatus::Failed,
+                        Some(e.clone()),
+                    )
+                    .await
+                {
                     tracing::warn!("Transaction {}: failed to set Failed: {}", idx, update_err);
                 }
             }
@@ -960,7 +997,10 @@ async fn process_get_status(
         results.push(status_result);
     }
 
-    tracing::info!("✓ Status query completed for {} transaction(s)", results.len());
+    tracing::info!(
+        "✓ Status query completed for {} transaction(s)",
+        results.len()
+    );
     Ok(GetStatusResponse { result: results })
 }
 
@@ -1131,7 +1171,10 @@ async fn build_exchange_rate_response(
         Err(_) => {
             return ExchangeRateResponse {
                 result: vec![ExchangeRateResultItem::Error(ExchangeRateError {
-                    error: ExchangeRateErrorBody { id: req.chain_id.clone(), message: "invalid chainId".to_string() },
+                    error: ExchangeRateErrorBody {
+                        id: req.chain_id.clone(),
+                        message: "invalid chainId".to_string(),
+                    },
                 })],
             };
         }
@@ -1142,8 +1185,11 @@ async fn build_exchange_rate_response(
 
     if req.token.to_lowercase() == zero_addr {
         // Native token: rate per gas = gasPrice (wei) / 1e18 ETH per gas
-        let gas_price = fetch_gas_price(chain_id, cfg).await.unwrap_or_else(|_| "0x4a817c800".to_string());
-        let wei = u128::from_str_radix(gas_price.trim_start_matches("0x"), 16).unwrap_or(20_000_000_000);
+        let gas_price = fetch_gas_price(chain_id, cfg)
+            .await
+            .unwrap_or_else(|_| "0x4a817c800".to_string());
+        let wei =
+            u128::from_str_radix(gas_price.trim_start_matches("0x"), 16).unwrap_or(20_000_000_000);
         let rate_eth_per_gas = (wei as f64) / 1e18_f64;
         let item = ExchangeRateResultItem::Success(ExchangeRateSuccess {
             quote: ExchangeRateQuote {
@@ -1170,7 +1216,10 @@ async fn build_exchange_rate_response(
     // ERC20 token: without oracle integration, return an error for now
     ExchangeRateResponse {
         result: vec![ExchangeRateResultItem::Error(ExchangeRateError {
-            error: ExchangeRateErrorBody { id: req.token.clone(), message: "token exchange rate unavailable".to_string() },
+            error: ExchangeRateErrorBody {
+                id: req.token.clone(),
+                message: "token exchange rate unavailable".to_string(),
+            },
         })],
     }
 }
@@ -1380,10 +1429,20 @@ impl RpcServer {
                     quote: QuoteInner {
                         fee,
                         rate: (wei_per_gas as f64) / 1e18_f64,
-                        token: TokenInfo { decimals: 18, address: "0x0000000000000000000000000000000000000000".to_string(), symbol: Some("ETH".to_string()), name: Some("Ethereum".to_string()) },
+                        token: TokenInfo {
+                            decimals: 18,
+                            address: "0x0000000000000000000000000000000000000000".to_string(),
+                            symbol: Some("ETH".to_string()),
+                            name: Some("Ethereum".to_string()),
+                        },
                     },
-                    relayer_calls: vec![RelayerCall { to: input.to.clone(), data: input.data.clone() }],
-                    fee_collector: std::env::var("RELAYX_FEE_COLLECTOR").ok().unwrap_or_else(|| "0x55f3a93f544e01ce4378d25e927d7c493b863bd6".to_string()),
+                    relayer_calls: vec![RelayerCall {
+                        to: input.to.clone(),
+                        data: input.data.clone(),
+                    }],
+                    fee_collector: std::env::var("RELAYX_FEE_COLLECTOR").ok().unwrap_or_else(
+                        || "0x55f3a93f544e01ce4378d25e927d7c493b863bd6".to_string(),
+                    ),
                     revert_reason: "".to_string(),
                 };
 
@@ -1443,24 +1502,77 @@ impl RpcServer {
                     sleep(Duration::from_secs(10)).await;
                     if let Ok(requests) = storage_bg.get_requests(Some(1000)).await {
                         for req in requests {
-                            if matches!(req.status, RequestStatus::Pending | RequestStatus::Processing) {
+                            if matches!(
+                                req.status,
+                                RequestStatus::Pending | RequestStatus::Processing
+                            ) {
                                 if let Some(tx_hash) = req.transaction_hash.clone() {
                                     // Try fetch receipt
-                                    if let Some(receipt_status) = fetch_and_update_receipt(&storage_bg, &cfg_bg, &req, &tx_hash).await {
-                                        tracing::debug!("Receipt processed for {} => {:?}", req.id, receipt_status);
+                                    if let Some(receipt_status) = fetch_and_update_receipt(
+                                        &storage_bg,
+                                        &cfg_bg,
+                                        &req,
+                                        &tx_hash,
+                                    )
+                                    .await
+                                    {
+                                        tracing::debug!(
+                                            "Receipt processed for {} => {:?}",
+                                            req.id,
+                                            receipt_status
+                                        );
                                     } else {
                                         // If still pending, attempt gas-bump resubmission
-                                        if let Ok(price_hex) = fetch_gas_price(req.chain_id, &cfg_bg).await {
+                                        if let Ok(price_hex) =
+                                            fetch_gas_price(req.chain_id, &cfg_bg).await
+                                        {
                                             let bumped = bump_gas_price_hex(&price_hex, 20);
                                             if let Some(data) = req.data.clone() {
-                                                match send_relay_transaction(&req.to_address, &data, req.chain_id, req.gas_limit, &bumped, &cfg_bg).await {
+                                                match send_relay_transaction(
+                                                    &req.to_address,
+                                                    &data,
+                                                    req.chain_id,
+                                                    req.gas_limit,
+                                                    &bumped,
+                                                    &cfg_bg,
+                                                )
+                                                .await
+                                                {
                                                     Ok(new_tx_hash) => {
-                                                        let _ = storage_bg.update_request_tx_hash(req.id, new_tx_hash.clone()).await;
-                                                        let _ = storage_bg.add_resubmission(req.id, &Resubmission { status: 201, transaction_hash: new_tx_hash, chain_id: req.chain_id.to_string() }).await;
-                                                        let _ = storage_bg.update_request_status(req.id, RequestStatus::Processing, None).await;
+                                                        let _ = storage_bg
+                                                            .update_request_tx_hash(
+                                                                req.id,
+                                                                new_tx_hash.clone(),
+                                                            )
+                                                            .await;
+                                                        let _ = storage_bg
+                                                            .add_resubmission(
+                                                                req.id,
+                                                                &Resubmission {
+                                                                    status: 201,
+                                                                    transaction_hash: new_tx_hash,
+                                                                    chain_id: req
+                                                                        .chain_id
+                                                                        .to_string(),
+                                                                },
+                                                            )
+                                                            .await;
+                                                        let _ = storage_bg
+                                                            .update_request_status(
+                                                                req.id,
+                                                                RequestStatus::Processing,
+                                                                None,
+                                                            )
+                                                            .await;
                                                     }
                                                     Err(e) => {
-                                                        let _ = storage_bg.update_request_status(req.id, RequestStatus::Failed, Some(e)).await;
+                                                        let _ = storage_bg
+                                                            .update_request_status(
+                                                                req.id,
+                                                                RequestStatus::Failed,
+                                                                Some(e),
+                                                            )
+                                                            .await;
                                                     }
                                                 }
                                             }
@@ -1483,7 +1595,12 @@ impl RpcServer {
 }
 
 /// Fetch transaction receipt and update storage status accordingly
-async fn fetch_and_update_receipt(storage: &Storage, cfg: &Config, req: &RelayerRequest, tx_hash: &str) -> Option<RequestStatus> {
+async fn fetch_and_update_receipt(
+    storage: &Storage,
+    cfg: &Config,
+    req: &RelayerRequest,
+    tx_hash: &str,
+) -> Option<RequestStatus> {
     let rpc_url = match cfg.rpc_url_for_chain(&req.chain_id.to_string()) {
         Some(u) => u,
         None => return None,
@@ -1498,7 +1615,9 @@ async fn fetch_and_update_receipt(storage: &Storage, cfg: &Config, req: &Relayer
     };
 
     let hash_bytes = hex::decode(hash).ok()?;
-    if hash_bytes.len() != 32 { return None; }
+    if hash_bytes.len() != 32 {
+        return None;
+    }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&hash_bytes);
     let txh = alloy::primitives::B256::from(arr);
@@ -1508,10 +1627,18 @@ async fn fetch_and_update_receipt(storage: &Storage, cfg: &Config, req: &Relayer
             // status: true = success, false = fail
             let status_val = rcpt.status();
             if status_val {
-                let _ = storage.update_request_status(req.id, RequestStatus::Completed, None).await;
+                let _ = storage
+                    .update_request_status(req.id, RequestStatus::Completed, None)
+                    .await;
                 Some(RequestStatus::Completed)
             } else {
-                let _ = storage.update_request_status(req.id, RequestStatus::Failed, Some("onchain revert".to_string())).await;
+                let _ = storage
+                    .update_request_status(
+                        req.id,
+                        RequestStatus::Failed,
+                        Some("onchain revert".to_string()),
+                    )
+                    .await;
                 Some(RequestStatus::Failed)
             }
         }
@@ -1524,7 +1651,7 @@ async fn fetch_and_update_receipt(storage: &Storage, cfg: &Config, req: &Relayer
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use crate::types::{SendTransactionCapabilities, PaymentCapability};
+    use crate::types::{PaymentCapability, SendTransactionCapabilities};
 
     fn test_config() -> Config {
         Config {
@@ -1551,7 +1678,9 @@ mod tests {
     async fn test_get_capabilities_contains_native_and_sponsored() {
         let storage = test_storage().await;
         let cfg = test_config();
-        let resp = super::process_get_capabilities(storage, &cfg).await.unwrap();
+        let resp = super::process_get_capabilities(storage, &cfg)
+            .await
+            .unwrap();
         let mut has_native = false;
         let mut has_sponsored = false;
         for p in resp.capabilities.payment {
@@ -1579,7 +1708,9 @@ mod tests {
     async fn test_get_status_invalid_id_format() {
         let storage = test_storage().await;
         let cfg = test_config();
-        let req = GetStatusRequest { ids: vec!["not-a-uuid".to_string()] };
+        let req = GetStatusRequest {
+            ids: vec!["not-a-uuid".to_string()],
+        };
         let resp = super::process_get_status(storage, &req, &cfg).await.unwrap();
         assert_eq!(resp.result.len(), 1);
         assert_eq!(resp.result[0].status, 400);
@@ -1594,7 +1725,13 @@ mod tests {
         let req1 = SendTransactionRequest {
             to: "".to_string(),
             data: "0x".to_string(),
-            capabilities: SendTransactionCapabilities { payment: PaymentCapability { payment_type: "native".to_string(), token: "0x0000000000000000000000000000000000000000".to_string(), data: "".to_string() } },
+            capabilities: SendTransactionCapabilities {
+                payment: PaymentCapability {
+                    payment_type: "native".to_string(),
+                    token: "0x0000000000000000000000000000000000000000".to_string(),
+                    data: "".to_string(),
+                },
+            },
             chain_id: "1".to_string(),
             authorization_list: "".to_string(),
         };
@@ -1602,12 +1739,19 @@ mod tests {
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
 
         // Missing 'data'
-        let req2 = SendTransactionRequest { data: "".to_string(), ..req1.clone() };
+        let req2 = SendTransactionRequest {
+            data: "".to_string(),
+            ..req1.clone()
+        };
         let err = super::process_send_transaction(storage.clone(), &req2, &cfg).await.err().unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
 
         // Missing 'chainId'
-        let req3 = SendTransactionRequest { chain_id: "".to_string(), data: "0x12".to_string(), ..req1.clone() };
+        let req3 = SendTransactionRequest {
+            chain_id: "".to_string(),
+            data: "0x12".to_string(),
+            ..req1.clone()
+        };
         let err = super::process_send_transaction(storage.clone(), &req3, &cfg).await.err().unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
     }
@@ -1619,7 +1763,13 @@ mod tests {
         let req = SendTransactionRequest {
             to: "0x0000000000000000000000000000000000000000".to_string(),
             data: "0x12".to_string(),
-            capabilities: SendTransactionCapabilities { payment: PaymentCapability { payment_type: "native".to_string(), token: "0x0000000000000000000000000000000000000000".to_string(), data: "".to_string() } },
+            capabilities: SendTransactionCapabilities {
+                payment: PaymentCapability {
+                    payment_type: "native".to_string(),
+                    token: "0x0000000000000000000000000000000000000000".to_string(),
+                    data: "".to_string(),
+                },
+            },
             chain_id: "999999".to_string(),
             authorization_list: "".to_string(),
         };
@@ -1633,7 +1783,13 @@ mod tests {
         let cfg = test_config();
         let req = SendTransactionMultichainRequest {
             transactions: vec![],
-            capabilities: SendTransactionCapabilities { payment: PaymentCapability { payment_type: "native".to_string(), token: "0x0000000000000000000000000000000000000000".to_string(), data: "".to_string() } },
+            capabilities: SendTransactionCapabilities {
+                payment: PaymentCapability {
+                    payment_type: "native".to_string(),
+                    token: "0x0000000000000000000000000000000000000000".to_string(),
+                    data: "".to_string(),
+                },
+            },
             payment_chain_id: "1".to_string(),
         };
         let err = super::process_send_transaction_multichain(storage, &req, &cfg).await.err().unwrap();
@@ -1644,13 +1800,25 @@ mod tests {
     async fn test_exchange_rate_invalid_chain_and_erc20_unavailable() {
         let cfg = test_config();
         // invalid chain id
-        let r1 = ExchangeRateRequest { token: "0x0000000000000000000000000000000000000000".to_string(), chain_id: "abc".to_string() };
+        let r1 = ExchangeRateRequest {
+            token: "0x0000000000000000000000000000000000000000".to_string(),
+            chain_id: "abc".to_string(),
+        };
         let resp1 = super::build_exchange_rate_response(&cfg, &r1).await;
-        assert!(matches!(resp1.result.first().unwrap(), ExchangeRateResultItem::Error(_)));
+        assert!(matches!(
+            resp1.result.first().unwrap(),
+            ExchangeRateResultItem::Error(_)
+        ));
 
         // ERC20 unavailable
-        let r2 = ExchangeRateRequest { token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(), chain_id: "1".to_string() };
+        let r2 = ExchangeRateRequest {
+            token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(),
+            chain_id: "1".to_string(),
+        };
         let resp2 = super::build_exchange_rate_response(&cfg, &r2).await;
-        assert!(matches!(resp2.result.first().unwrap(), ExchangeRateResultItem::Error(_)));
+        assert!(matches!(
+            resp2.result.first().unwrap(),
+            ExchangeRateResultItem::Error(_)
+        ));
     }
 }
