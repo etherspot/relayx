@@ -586,15 +586,7 @@ async fn process_send_transaction(
 
     // Send the transaction on-chain
     tracing::info!("Sending relay transaction on-chain...");
-    match send_relay_transaction(
-        &input.to,
-        &input.data,
-        chain_id,
-        gas_limit,
-        &gas_price,
-        cfg,
-    )
-    .await
+    match send_relay_transaction(&input.to, &input.data, chain_id, gas_limit, &gas_price, cfg).await
     {
         Ok(tx_hash) => {
             tracing::info!(
@@ -854,7 +846,7 @@ async fn process_send_transaction_multichain(
             from_address: fee_collector.clone(), // Use fee collector as sender address
             to_address: tx.to.clone(),
             amount: "0".to_string(),
-            gas_limit, // Dynamic gas limit from simulation
+            gas_limit,                    // Dynamic gas limit from simulation
             gas_price: gas_price.clone(), // Dynamic gas price from RPC
             data: Some(tx.data.clone()),
             nonce: 0,
@@ -966,7 +958,9 @@ async fn process_get_status(
 
                     // If there was an off-chain error, include it
                     if let Some(msg) = req.error_message.clone() {
-                        status_result.offchain_failure.push(OffchainFailure { message: msg });
+                        status_result
+                            .offchain_failure
+                            .push(OffchainFailure { message: msg });
                     }
 
                     // Include any resubmissions recorded
@@ -1404,7 +1398,9 @@ impl RpcServer {
                 let inputs: Vec<QuoteRequest> = params
                     .parse::<Vec<QuoteRequest>>()
                     .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
-                let input = inputs.first().ok_or_else(|| jsonrpc_core::Error::invalid_params("missing params: expected one object"))?;
+                let input = inputs.first().ok_or_else(|| {
+                    jsonrpc_core::Error::invalid_params("missing params: expected one object")
+                })?;
 
                 // Minimal realistic quote: estimate gas and use current gas price
                 let chain_id: u64 = input
@@ -1650,8 +1646,8 @@ async fn fetch_and_update_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use crate::types::{PaymentCapability, SendTransactionCapabilities};
+    use tempfile::tempdir;
 
     fn test_config() -> Config {
         Config {
@@ -1711,7 +1707,9 @@ mod tests {
         let req = GetStatusRequest {
             ids: vec!["not-a-uuid".to_string()],
         };
-        let resp = super::process_get_status(storage, &req, &cfg).await.unwrap();
+        let resp = super::process_get_status(storage, &req, &cfg)
+            .await
+            .unwrap();
         assert_eq!(resp.result.len(), 1);
         assert_eq!(resp.result[0].status, 400);
     }
@@ -1735,7 +1733,10 @@ mod tests {
             chain_id: "1".to_string(),
             authorization_list: "".to_string(),
         };
-        let err = super::process_send_transaction(storage.clone(), &req1, &cfg).await.err().unwrap();
+        let err = super::process_send_transaction(storage.clone(), &req1, &cfg)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
 
         // Missing 'data'
@@ -1743,7 +1744,10 @@ mod tests {
             data: "".to_string(),
             ..req1.clone()
         };
-        let err = super::process_send_transaction(storage.clone(), &req2, &cfg).await.err().unwrap();
+        let err = super::process_send_transaction(storage.clone(), &req2, &cfg)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
 
         // Missing 'chainId'
@@ -1752,7 +1756,10 @@ mod tests {
             data: "0x12".to_string(),
             ..req1.clone()
         };
-        let err = super::process_send_transaction(storage.clone(), &req3, &cfg).await.err().unwrap();
+        let err = super::process_send_transaction(storage.clone(), &req3, &cfg)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
     }
 
@@ -1773,7 +1780,10 @@ mod tests {
             chain_id: "999999".to_string(),
             authorization_list: "".to_string(),
         };
-        let err = super::process_send_transaction(storage, &req, &cfg).await.err().unwrap();
+        let err = super::process_send_transaction(storage, &req, &cfg)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
     }
 
@@ -1792,7 +1802,10 @@ mod tests {
             },
             payment_chain_id: "1".to_string(),
         };
-        let err = super::process_send_transaction_multichain(storage, &req, &cfg).await.err().unwrap();
+        let err = super::process_send_transaction_multichain(storage, &req, &cfg)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
     }
 
