@@ -273,7 +273,11 @@ impl Config {
             }
         }
         self.get_json_config()
-            .and_then(|v| v.get("etherscanApiBase").and_then(|s| s.as_str()).map(|s| s.to_string()))
+            .and_then(|v| {
+                v.get("etherscanApiBase")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string())
+            })
             .unwrap_or_else(|| "https://api.etherscan.io/v2/api".to_string())
     }
 }
