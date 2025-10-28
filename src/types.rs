@@ -23,6 +23,7 @@ pub struct RelayerRequest {
     pub data: Option<String>,
     pub nonce: u64,
     pub chain_id: u64,
+    pub transaction_hash: Option<String>,
     pub status: RequestStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

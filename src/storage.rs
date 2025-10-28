@@ -5,7 +5,7 @@ use rocksdb::{DBWithThreadMode, MultiThreaded, Options};
 use serde_json;
 use uuid::Uuid;
 
-use crate::types::{RelayerRequest, RelayerResponse, RequestStatus};
+use crate::types::{RelayerRequest, RelayerResponse, RequestStatus, Resubmission};
 
 pub struct Storage {
     db: Arc<DBWithThreadMode<MultiThreaded>>,
@@ -142,6 +142,61 @@ impl Storage {
             tracing::warn!("Attempted to update non-existent request: {}", id);
         }
         Ok(())
+    }
+
+    /// Update request transaction hash
+    pub async fn update_request_tx_hash(&self, id: Uuid, tx_hash: String) -> Result<()> {
+        tracing::debug!("Updating request {} tx hash to: {}", id, tx_hash);
+
+        if let Some(mut request) = self.get_request(id).await? {
+            request.transaction_hash = Some(tx_hash);
+            request.updated_at = chrono::Utc::now();
+            self.store_request(&request).await?;
+            tracing::info!("Request {} transaction hash stored", id);
+        } else {
+            tracing::warn!("Attempted to set tx hash for non-existent request: {}", id);
+        }
+        Ok(())
+    }
+
+    /// Update request nonce
+    pub async fn update_request_nonce(&self, id: Uuid, nonce: u64) -> Result<()> {
+        tracing::debug!("Updating request {} nonce to: {}", id, nonce);
+        if let Some(mut request) = self.get_request(id).await? {
+            request.nonce = nonce;
+            request.updated_at = chrono::Utc::now();
+            self.store_request(&request).await?;
+            tracing::info!("Request {} nonce stored", id);
+        } else {
+            tracing::warn!("Attempted to set nonce for non-existent request: {}", id);
+        }
+        Ok(())
+    }
+
+    /// Record a resubmission attempt for a request
+    pub async fn add_resubmission(&self, request_id: Uuid, resub: &Resubmission) -> Result<()> {
+        let key = format!("resubmission:{}:{}:{}", request_id, resub.chain_id, resub.transaction_hash);
+        let value = serde_json::to_string(resub)?;
+        self.db.put(key.as_bytes(), value.as_bytes())?;
+        Ok(())
+    }
+
+    /// Retrieve resubmissions for a request
+    pub async fn get_resubmissions(&self, request_id: Uuid) -> Result<Vec<Resubmission>> {
+        let mut items = Vec::new();
+        let prefix = format!("resubmission:{}:", request_id);
+        let iter = self
+            .db
+            .iterator(rocksdb::IteratorMode::From(prefix.as_bytes(), rocksdb::Direction::Forward));
+        for result in iter {
+            let (key, value) = result?;
+            let key_str = String::from_utf8_lossy(&key);
+            if !key_str.starts_with(&prefix) { break; }
+            if let Ok(resub) = serde_json::from_slice::<Resubmission>(&value) {
+                items.push(resub);
+            }
+        }
+        Ok(items)
     }
 
     /// Get all requests with optional filtering
