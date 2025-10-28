@@ -1519,3 +1519,138 @@ async fn fetch_and_update_receipt(storage: &Storage, cfg: &Config, req: &Relayer
         Err(_) => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use crate::types::{SendTransactionCapabilities, PaymentCapability};
+
+    fn test_config() -> Config {
+        Config {
+            rpc_host: "127.0.0.1".to_string(),
+            rpc_port: 8545,
+            db_path: std::path::PathBuf::from("./relayx_db_test"),
+            relayers: "".to_string(),
+            max_concurrent_requests: 100,
+            request_timeout: 30,
+            config_path: None,
+            http_address: "127.0.0.1".to_string(),
+            http_port: 4937,
+            http_cors: "*".to_string(),
+            log_level: "debug".to_string(),
+        }
+    }
+
+    async fn test_storage() -> Storage {
+        let dir = tempdir().unwrap();
+        Storage::new(dir.path()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_get_capabilities_contains_native_and_sponsored() {
+        let storage = test_storage().await;
+        let cfg = test_config();
+        let resp = super::process_get_capabilities(storage, &cfg).await.unwrap();
+        let mut has_native = false;
+        let mut has_sponsored = false;
+        for p in resp.capabilities.payment {
+            match p {
+                Payment::Native(_) => has_native = true,
+                Payment::Sponsored(_) => has_sponsored = true,
+                _ => {}
+            }
+        }
+        assert!(has_native && has_sponsored);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_initial_counts() {
+        let storage = test_storage().await;
+        let cfg = test_config();
+        let health = super::process_health_check(storage, &cfg).await.unwrap();
+        assert_eq!(health.total_requests, 0);
+        assert_eq!(health.pending_requests, 0);
+        assert_eq!(health.completed_requests, 0);
+        assert_eq!(health.failed_requests, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_status_invalid_id_format() {
+        let storage = test_storage().await;
+        let cfg = test_config();
+        let req = GetStatusRequest { ids: vec!["not-a-uuid".to_string()] };
+        let resp = super::process_get_status(storage, &req, &cfg).await.unwrap();
+        assert_eq!(resp.result.len(), 1);
+        assert_eq!(resp.result[0].status, 400);
+    }
+
+    #[tokio::test]
+    async fn test_send_transaction_missing_fields() {
+        let storage = test_storage().await;
+        let cfg = test_config();
+
+        // Missing 'to'
+        let req1 = SendTransactionRequest {
+            to: "".to_string(),
+            data: "0x".to_string(),
+            capabilities: SendTransactionCapabilities { payment: PaymentCapability { payment_type: "native".to_string(), token: "0x0000000000000000000000000000000000000000".to_string(), data: "".to_string() } },
+            chain_id: "1".to_string(),
+            authorization_list: "".to_string(),
+        };
+        let err = super::process_send_transaction(storage.clone(), &req1, &cfg).await.err().unwrap();
+        assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
+
+        // Missing 'data'
+        let req2 = SendTransactionRequest { data: "".to_string(), ..req1.clone() };
+        let err = super::process_send_transaction(storage.clone(), &req2, &cfg).await.err().unwrap();
+        assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
+
+        // Missing 'chainId'
+        let req3 = SendTransactionRequest { chain_id: "".to_string(), data: "0x12".to_string(), ..req1.clone() };
+        let err = super::process_send_transaction(storage.clone(), &req3, &cfg).await.err().unwrap();
+        assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
+    }
+
+    #[tokio::test]
+    async fn test_send_transaction_unsupported_chain() {
+        let storage = test_storage().await;
+        let cfg = test_config();
+        let req = SendTransactionRequest {
+            to: "0x0000000000000000000000000000000000000000".to_string(),
+            data: "0x12".to_string(),
+            capabilities: SendTransactionCapabilities { payment: PaymentCapability { payment_type: "native".to_string(), token: "0x0000000000000000000000000000000000000000".to_string(), data: "".to_string() } },
+            chain_id: "999999".to_string(),
+            authorization_list: "".to_string(),
+        };
+        let err = super::process_send_transaction(storage, &req, &cfg).await.err().unwrap();
+        assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
+    }
+
+    #[tokio::test]
+    async fn test_multichain_empty_transactions() {
+        let storage = test_storage().await;
+        let cfg = test_config();
+        let req = SendTransactionMultichainRequest {
+            transactions: vec![],
+            capabilities: SendTransactionCapabilities { payment: PaymentCapability { payment_type: "native".to_string(), token: "0x0000000000000000000000000000000000000000".to_string(), data: "".to_string() } },
+            payment_chain_id: "1".to_string(),
+        };
+        let err = super::process_send_transaction_multichain(storage, &req, &cfg).await.err().unwrap();
+        assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
+    }
+
+    #[tokio::test]
+    async fn test_exchange_rate_invalid_chain_and_erc20_unavailable() {
+        let cfg = test_config();
+        // invalid chain id
+        let r1 = ExchangeRateRequest { token: "0x0000000000000000000000000000000000000000".to_string(), chain_id: "abc".to_string() };
+        let resp1 = super::build_exchange_rate_response(&cfg, &r1).await;
+        assert!(matches!(resp1.result.first().unwrap(), ExchangeRateResultItem::Error(_)));
+
+        // ERC20 unavailable
+        let r2 = ExchangeRateRequest { token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(), chain_id: "1".to_string() };
+        let resp2 = super::build_exchange_rate_response(&cfg, &r2).await;
+        assert!(matches!(resp2.result.first().unwrap(), ExchangeRateResultItem::Error(_)));
+    }
+}
