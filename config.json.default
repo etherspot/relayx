@@ -13,21 +13,29 @@
     "56": "https://bsc-dataseed.binance.org",
     "137": "https://polygon-rpc.com",
     "42161": "https://arb1.arbitrum.io/rpc",
-    "8453": "https://mainnet.base.org"
+    "8453": "https://mainnet.base.org",
+    "11155111": "https://ethereum-sepolia.publicnode.com",
+    "11155420": "https://optimism-sepolia.publicnode.com"
   },
   "chainlink": {
     "nativeUsd": {
-      "1": "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419"
+      "1": "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419",
+      "10": "0x13e3ee699d1909e989722e753853ae30b17e08c5",
+      "56": "0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE",
+      "137": "0xAB594600376Ec9fD91F8e885dADF0CE036862dE0",
+      "42161": "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612",
+      "11155111": "0x694AA1769357215DE4FAC081bf1f309aDC325306"
     },
     "tokenUsd": {
       "1": {
-        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": "0x8fffffd4afb6115b954bd326cbe7b4ba576818f6",
-        "0x036CbD53842c5426634e7929541eC2318f3dCF7e": "0x8fffffd4afb6115b954bd326cbe7b4ba576818f6",
-        "0xdAC17F958D2ee523a2206206994597C13D831ec7": "0x3E7d1eAB13ad8aB6F6c6b9b8B7c6e8f7a9c8b7a6"
+        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": "0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6",
+        "0xdAC17F958D2ee523a2206206994597C13D831ec7": "0x3E7d1eAB13ad0104d2750B8863b489D65364e32D",
+        "0x6B175474E89094C44Da98b954EedeAC495271d0F": "0xAed0c38402a5d19df6E4c03F4E2DceD6e29c1ee9"
       },
       "137": {
-        "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174": "0xAB594600376Ec9fD91F8e885dADF0CE036862dE0",
-        "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063": "0xAB594600376Ec9fD91F8e885dADF0CE036862dE0"
+        "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174": "0x572dDec9087154dC5dfBB1546Bb62713147e0Ab0",
+        "0xc2132D05D31c914a87C6611C10748AaCB8fA6eC2": "0x0A6513e40db6EB1b165753AD52E80663aeA50545",
+        "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063": "0x4746DeC9e833A82EC7C2C1356372CcF2cfcD2F3D"
       }
     }
   }
