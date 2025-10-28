@@ -20,7 +20,7 @@ use crate::{
     config::Config,
     storage::Storage,
     types::{
-        Capabilities, Erc20Payment, ExchangeRateQuote, ExchangeRateRequest, ExchangeRateResponse,
+        Capabilities, Erc20Payment, ExchangeRateError, ExchangeRateErrorBody, ExchangeRateQuote, ExchangeRateRequest, ExchangeRateResponse,
         ExchangeRateResultItem, ExchangeRateSuccess, GetCapabilitiesResponse, GetStatusRequest,
         GetStatusResponse, HealthResponse, Log, MultichainTransactionResult, NativePayment,
         OffchainFailure, OnchainFailure, Payment, PaymentType, QuoteInner, QuoteRequest,
@@ -67,8 +67,46 @@ fn get_relayer_private_key() -> Result<String, String> {
         .map_err(|_| "RELAYX_PRIVATE_KEY environment variable not set".to_string())
 }
 
-/// Fetch current gas price from the RPC provider for the given chain
+/// Fetch current gas price for the given chain.
+/// Priority: Etherscan Gas Oracle (if API key configured) -> provider.get_gas_price
 async fn fetch_gas_price(chain_id: u64, cfg: &Config) -> Result<String, String> {
+    if let Some(api_key) = cfg.etherscan_api_key() {
+        // Use Etherscan Gas Oracle
+        // Docs: https://docs.etherscan.io/api-reference/endpoint/gasoracle
+        let base = cfg.etherscan_api_base();
+        let url = format!(
+            "{}?chainid={}&module=gastracker&action=gasoracle&apikey={}",
+            base, chain_id, api_key
+        );
+        match reqwest::Client::new().get(&url).send().await {
+            Ok(resp) => match resp.json::<serde_json::Value>().await {
+                Ok(json) => {
+                    if json.get("status").and_then(|s| s.as_str()) == Some("1") {
+                        if let Some(result) = json.get("result") {
+                            // Prefer ProposeGasPrice; values are in Gwei (string floats)
+                            if let Some(p) = result.get("ProposeGasPrice").and_then(|v| v.as_str()) {
+                                if let Ok(gwei_float) = p.parse::<f64>() {
+                                    let wei = (gwei_float * 1e9_f64) as u128;
+                                    tracing::debug!(
+                                        "Etherscan gas price for chain {}: {} gwei ({} wei)",
+                                        chain_id, gwei_float, wei
+                                    );
+                                    return Ok(format!("0x{:x}", wei));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("Etherscan gasoracle JSON parse error: {}", e);
+                }
+            },
+            Err(e) => {
+                tracing::debug!("Etherscan gasoracle request failed: {}", e);
+            }
+        }
+    }
+
     // Get RPC URL for the chain
     let rpc_url = cfg
         .rpc_url_for_chain(&chain_id.to_string())
@@ -81,7 +119,7 @@ async fn fetch_gas_price(chain_id: u64, cfg: &Config) -> Result<String, String> 
             .map_err(|e| format!("Invalid RPC URL: {}", e))?,
     );
 
-    // Fetch the current gas price
+    // Fallback: Fetch the current gas price from provider
     match provider.get_gas_price().await {
         Ok(gas_price) => {
             let gas_price_hex = format!("0x{:x}", gas_price);
@@ -517,6 +555,7 @@ async fn process_send_transaction(
         data: Some(input.data.clone()),
         nonce: 0, // Will be fetched from chain
         chain_id,
+        transaction_hash: None, // Will be set when transaction is sent
         status: RequestStatus::Pending,
         created_at: Utc::now(),
         updated_at: Utc::now(),
@@ -798,10 +837,11 @@ async fn process_send_transaction_multichain(
             to_address: tx.to.clone(),
             amount: "0".to_string(),
             gas_limit, // Dynamic gas limit from simulation
-            gas_price, // Dynamic gas price from RPC
+            gas_price: gas_price.clone(), // Dynamic gas price from RPC
             data: Some(tx.data.clone()),
             nonce: 0,
             chain_id,
+            transaction_hash: None, // Will be set when transaction is sent
             status: RequestStatus::Pending,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -1465,16 +1505,14 @@ async fn fetch_and_update_receipt(storage: &Storage, cfg: &Config, req: &Relayer
 
     match provider.get_transaction_receipt(txh).await {
         Ok(Some(rcpt)) => {
-            // status: Some(1) success, Some(0) fail
-            let status_val = rcpt.status.and_then(|s| s.as_u64());
-            if status_val == Some(1) {
+            // status: true = success, false = fail
+            let status_val = rcpt.status();
+            if status_val {
                 let _ = storage.update_request_status(req.id, RequestStatus::Completed, None).await;
                 Some(RequestStatus::Completed)
-            } else if status_val == Some(0) {
+            } else {
                 let _ = storage.update_request_status(req.id, RequestStatus::Failed, Some("onchain revert".to_string())).await;
                 Some(RequestStatus::Failed)
-            } else {
-                None
             }
         }
         Ok(None) => None, // not yet mined
