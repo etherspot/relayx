@@ -3,6 +3,10 @@
 # -------- Builder stage --------
 FROM rust:1.85 AS builder
 
+# Make buildx platform vars available (for per-arch cache isolation)
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+
 # Update to nightly for edition2024 support
 RUN rustup default nightly
 
@@ -30,15 +34,15 @@ RUN mkdir -p src \
 # 3) Clear cargo registry cache and prebuild dependencies
 RUN rm -rf /usr/local/cargo/registry || true && \
     cargo clean || true
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
+RUN --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-target-${TARGETPLATFORM},target=/app/target \
     cargo build --release
 
 # 4) Now copy the full source and build the actual binary
 COPY . .
 RUN rm -rf /usr/local/cargo/registry/src/index.crates.io-* || true
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
+RUN --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-target-${TARGETPLATFORM},target=/app/target \
     cargo build --release && \
     cp /app/target/release/relayx /app/relayx
 
