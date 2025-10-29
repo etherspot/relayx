@@ -28,7 +28,8 @@ RUN mkdir -p src \
  && echo "fn main() {}" > src/bin/dummy.rs
 
 # 3) Clear cargo registry cache and prebuild dependencies
-RUN rm -rf /usr/local/cargo/registry/src/index.crates.io-* || true
+RUN rm -rf /usr/local/cargo/registry || true && \
+    cargo clean || true
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo build --release
@@ -46,8 +47,8 @@ FROM debian:bookworm-slim AS runtime
 
 # Minimal runtime deps
 RUN apt-get update -y \
- && apt-get install -y --no-install-recommends ca-certificates wget \
- && rm -rf /var/lib/apt/lists/* \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
  && update-ca-certificates
 
 WORKDIR /app
@@ -66,8 +67,8 @@ ENV HTTP_ADDRESS=0.0.0.0 \
 
 EXPOSE 4937
 
-# Healthcheck (optional)
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1:${HTTP_PORT}/ || exit 1
+# Healthcheck (optional) - using curl instead of wget to save space
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://127.0.0.1:${HTTP_PORT}/ || exit 1
 
 # Entrypoint uses CLI flags that mirror envs; config path via RELAYX_CONFIG
 ENTRYPOINT ["/usr/local/bin/relayx"]
