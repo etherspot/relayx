@@ -27,13 +27,15 @@ RUN mkdir -p src \
  && mkdir -p src/bin \
  && echo "fn main() {}" > src/bin/dummy.rs
 
-# 3) Prebuild dependencies
+# 3) Clear cargo registry cache and prebuild dependencies
+RUN rm -rf /usr/local/cargo/registry/src/index.crates.io-* || true
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo build --release
 
 # 4) Now copy the full source and build the actual binary
 COPY . .
+RUN rm -rf /usr/local/cargo/registry/src/index.crates.io-* || true
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo build --release && \
