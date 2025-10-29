@@ -1207,15 +1207,140 @@ async fn build_exchange_rate_response(
         return ExchangeRateResponse { result: vec![item] };
     }
 
-    // ERC20 token: without oracle integration, return an error for now
-    ExchangeRateResponse {
-        result: vec![ExchangeRateResultItem::Error(ExchangeRateError {
-            error: ExchangeRateErrorBody {
-                id: req.token.clone(),
-                message: "token exchange rate unavailable".to_string(),
-            },
-        })],
+    // ERC20 token: compute rate using Chainlink token/USD and native/USD feeds if configured
+    let chain_str = chain_id.to_string();
+
+    // Look up feeds from config
+    let token_feed = cfg.chainlink_token_usd(&chain_str, &req.token);
+    let native_feed = cfg.chainlink_native_usd(&chain_str);
+
+    if token_feed.is_none() || native_feed.is_none() {
+        return ExchangeRateResponse {
+            result: vec![ExchangeRateResultItem::Error(ExchangeRateError {
+                error: ExchangeRateErrorBody {
+                    id: req.token.clone(),
+                    message: "oracle feed not configured for chain/token".to_string(),
+                },
+            })],
+        };
     }
+
+    let token_feed_addr = token_feed.unwrap();
+    let native_feed_addr = native_feed.unwrap();
+
+    // Helper to call a contract view function
+    async fn eth_call_bytes(rpc_url: &str, to_address: &str, calldata: &[u8]) -> Option<Vec<u8>> {
+        let provider = ProviderBuilder::new().on_http(rpc_url.parse().ok()?);
+        let to: Address = to_address.parse().ok()?;
+        let tx = TransactionRequest::default()
+            .to(to)
+            .input(Bytes::from(calldata.to_vec()).into());
+        provider.call(&tx).await.ok().map(|bytes| bytes.to_vec())
+    }
+
+    // Read aggregator decimals (function selector 0x313ce567)
+    async fn read_decimals(rpc_url: &str, contract: &str) -> Option<u8> {
+        let sel_decimals: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
+        let out = eth_call_bytes(rpc_url, contract, &sel_decimals).await?;
+        // last 32 bytes right-padded; take last byte for u8
+        out.last().cloned()
+    }
+
+    // Read aggregator latestAnswer() (selector 0x50d25bcd) -> int256
+    async fn read_latest_answer(rpc_url: &str, aggregator: &str) -> Option<i128> {
+        let sel_latest_answer: [u8; 4] = [0x50, 0xd2, 0x5b, 0xcd];
+        let out = eth_call_bytes(rpc_url, aggregator, &sel_latest_answer).await?;
+        if out.len() < 32 {
+            return None;
+        }
+        let mut buf = [0u8; 16];
+        // take the lower 16 bytes (int128) from the 32-byte big-endian word
+        buf.copy_from_slice(&out[16..32]);
+        Some(i128::from_be_bytes(buf))
+    }
+
+    // Get RPC URL
+    let rpc_url = match cfg.rpc_url_for_chain(&chain_str) {
+        Some(u) => u,
+        None => {
+            return ExchangeRateResponse {
+                result: vec![ExchangeRateResultItem::Error(ExchangeRateError {
+                    error: ExchangeRateErrorBody {
+                        id: chain_str,
+                        message: "rpc not configured for chain".to_string(),
+                    },
+                })],
+            };
+        }
+    };
+
+    // Fetch prices and decimals
+    let native_dec = read_decimals(&rpc_url, &native_feed_addr)
+        .await
+        .unwrap_or(8);
+    let token_dec = read_decimals(&rpc_url, &token_feed_addr).await.unwrap_or(8);
+    let native_px = read_latest_answer(&rpc_url, &native_feed_addr).await;
+    let token_px = read_latest_answer(&rpc_url, &token_feed_addr).await;
+
+    let (native_px, token_px) = match (native_px, token_px) {
+        (Some(n), Some(t)) if n > 0 && t > 0 => (n as f64, t as f64),
+        _ => {
+            return ExchangeRateResponse {
+                result: vec![ExchangeRateResultItem::Error(ExchangeRateError {
+                    error: ExchangeRateErrorBody {
+                        id: req.token.clone(),
+                        message: "failed to read oracle price".to_string(),
+                    },
+                })],
+            };
+        }
+    };
+
+    // Convert to floating prices in USD
+    let native_usd = native_px / 10f64.powi(native_dec as i32);
+    let token_usd = token_px / 10f64.powi(token_dec as i32);
+
+    // Fetch gas price
+    let gas_price_hex = fetch_gas_price(chain_id, cfg)
+        .await
+        .unwrap_or_else(|_| "0x4a817c800".to_string());
+    let wei =
+        u128::from_str_radix(gas_price_hex.trim_start_matches("0x"), 16).unwrap_or(20_000_000_000);
+
+    // native per gas in ether
+    let native_per_gas = (wei as f64) / 1e18_f64;
+    // token per gas = native_per_gas * (native_usd / token_usd)
+    let token_per_gas = native_per_gas * (native_usd / token_usd);
+
+    // Determine token decimals via ERC20 decimals() if possible
+    async fn read_erc20_decimals(rpc_url: &str, token: &str) -> Option<u8> {
+        read_decimals(rpc_url, token).await
+    }
+    let token_decimals = read_erc20_decimals(&rpc_url, &req.token)
+        .await
+        .unwrap_or(18);
+
+    let item = ExchangeRateResultItem::Success(ExchangeRateSuccess {
+        quote: ExchangeRateQuote {
+            rate: token_per_gas,
+            token: TokenInfo {
+                decimals: token_decimals,
+                address: req.token.clone(),
+                symbol: None,
+                name: None,
+            },
+        },
+        gas_price: gas_price_hex,
+        max_fee_per_gas: None,
+        max_priority_fee_per_gas: None,
+        fee_collector: std::env::var("RELAYX_FEE_COLLECTOR")
+            .ok()
+            .or_else(|| cfg.fee_collector())
+            .unwrap_or_else(|| "0x55f3a93f544e01ce4378d25e927d7c493b863bd6".to_string()),
+        expiry,
+    });
+
+    ExchangeRateResponse { result: vec![item] }
 }
 
 /// Build a response for the relayer_getStatus endpoint

@@ -1,0 +1,388 @@
+{
+  "info": {
+    "name": "RelayX JSON-RPC",
+    "_postman_id": "b0a2a4b9-1f8e-4b79-a3c0-5a8f4e6cb3c1",
+    "description": "Collection to test RelayX JSON-RPC endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "health_check",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"health_check\",\n  \"params\": [],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(json.result).to.have.property('status');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_getExchangeRate (USDC on Ethereum)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_getExchangeRate\",\n  \"params\": [{\n    \"token\": \"{{eth_usdc}}\",\n    \"chainId\": \"{{chainId_mainnet}}\"\n  }],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(Array.isArray(json.result)).to.be.true;",
+              "pm.expect(json.result[0]).to.have.property('quote');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_getExchangeRate (USDT on Ethereum)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_getExchangeRate\",\n  \"params\": [{\n    \"token\": \"{{eth_usdt}}\",\n    \"chainId\": \"{{chainId_mainnet}}\"\n  }],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(Array.isArray(json.result)).to.be.true;",
+              "pm.expect(json.result[0]).to.have.property('quote');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_getExchangeRate (DAI on Ethereum)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_getExchangeRate\",\n  \"params\": [{\n    \"token\": \"{{eth_dai}}\",\n    \"chainId\": \"{{chainId_mainnet}}\"\n  }],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(Array.isArray(json.result)).to.be.true;",
+              "pm.expect(json.result[0]).to.have.property('quote');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_getExchangeRate (USDC on Polygon)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_getExchangeRate\",\n  \"params\": [{\n    \"token\": \"{{polygon_usdc}}\",\n    \"chainId\": \"{{chainId_polygon}}\"\n  }],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(Array.isArray(json.result)).to.be.true;",
+              "pm.expect(json.result[0]).to.have.property('quote');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_getExchangeRate (USDT on Polygon)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_getExchangeRate\",\n  \"params\": [{\n    \"token\": \"{{polygon_usdt}}\",\n    \"chainId\": \"{{chainId_polygon}}\"\n  }],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(Array.isArray(json.result)).to.be.true;",
+              "pm.expect(json.result[0]).to.have.property('quote');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_getExchangeRate (DAI on Polygon)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_getExchangeRate\",\n  \"params\": [{\n    \"token\": \"{{polygon_dai}}\",\n    \"chainId\": \"{{chainId_polygon}}\"\n  }],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(Array.isArray(json.result)).to.be.true;",
+              "pm.expect(json.result[0]).to.have.property('quote');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_getCapabilities",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_getCapabilities\",\n  \"params\": [],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result') || pm.expect(json).to.have.property('capabilities');",
+              "const payload = json.result || json;",
+              "pm.expect(payload).to.have.property('capabilities');",
+              "pm.expect(payload.capabilities).to.have.property('payment');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_getExchangeRate (native)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_getExchangeRate\",\n  \"params\": [{\n    \"token\": \"{{zeroAddress}}\",\n    \"chainId\": \"{{chainId_sepolia}}\"\n  }],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(Array.isArray(json.result)).to.be.true;",
+              "pm.expect(json.result[0]).to.have.property('quote');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_getQuote",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_getQuote\",\n  \"params\": [{\n    \"to\": \"{{exampleWallet}}\",\n    \"data\": \"{{exampleData}}\",\n    \"chainId\": \"{{chainId_sepolia}}\"\n  }],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(json.result).to.have.property('quote');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_sendTransaction (sponsored)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_sendTransaction\",\n  \"params\": [{\n    \"to\": \"{{exampleWallet}}\",\n    \"data\": \"{{exampleData}}\",\n    \"capabilities\": {\n      \"payment\": { \n        \"type\": \"sponsored\",\n        \"token\": \"\",\n        \"data\": \"\"\n      }\n    },\n    \"chainId\": \"{{chainId_sepolia}}\",\n    \"authorizationList\": \"\"\n  }],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(Array.isArray(json.result)).to.be.true;",
+              "const txId = json.result && json.result[0] && json.result[0].id;",
+              "if (txId) { pm.environment.set('lastTxId', txId); }"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_sendTransactionMultichain (sponsored)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_sendTransactionMultichain\",\n  \"params\": [{\n    \"transactions\": [{\n      \"to\": \"{{exampleWallet}}\",\n      \"data\": \"{{exampleData}}\",\n      \"chainId\": \"{{chainId_sepolia}}\"\n    },{\n      \"to\": \"{{exampleWallet}}\",\n      \"data\": \"{{exampleData}}\",\n      \"chainId\": \"{{chainId_op_sepolia}}\"\n    }],\n    \"capabilities\": {\n      \"payment\": { \n        \"type\": \"sponsored\",\n        \"token\": \"\",\n        \"data\": \"\"\n      }\n    },\n    \"paymentChainId\": \"{{chainId_sepolia}}\"\n  }],\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(Array.isArray(json.result)).to.be.true;"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "relayer_getStatus (using lastTxId)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": { "raw": "{{baseUrl}}", "host": ["{{baseUrl}}"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"relayer_getStatus\",\n  \"params\": {\n    \"ids\": [\"{{lastTxId}}\"]\n  },\n  \"id\": 1\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status code is 200', () => pm.response.code === 200);",
+              "const json = pm.response.json();",
+              "pm.expect(json).to.have.property('result');",
+              "pm.expect(Array.isArray(json.result)).to.be.true;"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    }
+  ],
+  "protocolProfileBehavior": {}
+}
+
+
