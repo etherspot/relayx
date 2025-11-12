@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 alloy = { version = "0.6", features = ["full", "node-bindings", "rpc-types-eth"] }
 alloy-dyn-abi = "0.8.26"
+alloy-eip7702 = { version = "0.4", features = ["k256", "serde"] }
+alloy-rlp = "0.3"
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.0", features = ["derive", "env"] }

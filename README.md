@@ -51,7 +51,7 @@ The service implements a simplified, high-performance JSON-RPC server with the f
 
 ### Simplified Design Principles
 
-- **No Blockchain Dependencies**: Eliminates complex blockchain RPC calls and provider management
+- **No Blockchain Dependencies**: Eliminates complex blockchain RPC calls and provider management when `RELAYX_STUB_MODE=true`; falls back to live RPCs when you need end-to-end integration
 - **Fast Response Times**: Stub responses provide immediate feedback without network latency
 - **Reliable Operation**: No external service dependencies for core functionality
 - **Easy Testing**: Predictable responses make integration testing straightforward
@@ -117,6 +117,7 @@ docker run --rm -p 4937:4937 -e RELAYX_CONFIG=/app/config.json \
 - `--log-level` (`LOG_LEVEL`): Logging level - trace, debug, info, warn, error (default: debug)
 - `--db-path`: RocksDB storage path (default: ./relayx_db)
 - `--config` (`RELAYX_CONFIG`): Path to JSON configuration file
+- `--relayer-private-key` (`RELAYX_PRIVATE_KEY`): Hex-encoded signer key used for relaying transactions
 
 **JSON Configuration File:**
 
@@ -128,6 +129,7 @@ The relayer supports streamlined configuration via JSON file:
   "http_port": 4937,
   "http_cors": "*",
   "log_level": "debug",
+  "relayerPrivateKey": "0x...",
   "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
   "defaultToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   "rpcs": {
@@ -174,6 +176,7 @@ The relayer automatically discovers supported ERC20 tokens from the `chainlink.t
 **Token Configuration:**
 - `RELAYX_DEFAULT_TOKEN`: Default ERC20 token address for fallback
 - `RELAYX_FEE_COLLECTOR`: Address to receive relayer fees
+- `RELAYX_STUB_MODE`: When set to `true`, returns deterministic stub responses without external RPC calls
 
 ### Transaction Simulation & Gas Estimation
 
@@ -254,12 +257,13 @@ INFO  ✓ Transaction accepted - ID: abc-123, To: 0x742d..., Chain: 1, Payment: 
 ### Core Relayer Methods
 
 1. **`relayer_getCapabilities`** - Discover supported payment methods and tokens
-2. **`relayer_getExchangeRate`** - Get token exchange rates for gas payment
+2. **`relayer_getFeeData`** - Fetch token-to-gas pricing and fee metadata (spec-compliant)
 3. **`relayer_getQuote`** - Simulate transactions and get gas estimates  
 4. **`relayer_sendTransaction`** - Submit signed transactions for relay
 5. **`relayer_sendTransactionMultichain`** - Submit transactions across multiple chains with single payment
 6. **`relayer_getStatus`** - Check status of submitted transactions
 7. **`health_check`** - Service health and metrics
+8. *(Legacy)* **`relayer_getExchangeRate`** - Back-compat alias for `relayer_getFeeData`
 
 ### Specification Compliance
 
