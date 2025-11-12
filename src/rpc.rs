@@ -17,6 +17,7 @@ use chrono::Utc;
 use jsonrpc_core::{IoHandler, Params};
 use jsonrpc_http_server::ServerBuilder;
 use tokio::time::{sleep, Duration};
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -183,8 +184,7 @@ fn get_relayer_private_key(cfg: &Config) -> Result<String, String> {
         .ok_or_else(|| "RELAYX_PRIVATE_KEY configuration missing".to_string())
 }
 
-/// Fetch current gas price for the given chain.
-/// Priority: Etherscan Gas Oracle (if API key configured) -> provider.get_gas_price
+/// Fetch current gas price for the given chain using the configured RPC provider.
 async fn fetch_gas_price(chain_id: u64, cfg: &Config) -> Result<String, String> {
     if stub_mode_enabled() {
         tracing::debug!(
@@ -193,59 +193,14 @@ async fn fetch_gas_price(chain_id: u64, cfg: &Config) -> Result<String, String> 
         );
         return Ok("0x4a817c800".to_string());
     }
-    if let Some(api_key) = cfg.etherscan_api_key() {
-        // Use Etherscan Gas Oracle
-        // Docs: https://docs.etherscan.io/api-reference/endpoint/gasoracle
-        let base = cfg.etherscan_api_base();
-        let url = format!(
-            "{}?chainid={}&module=gastracker&action=gasoracle&apikey={}",
-            base, chain_id, api_key
-        );
-        match reqwest::Client::new().get(&url).send().await {
-            Ok(resp) => match resp.json::<serde_json::Value>().await {
-                Ok(json) => {
-                    if json.get("status").and_then(|s| s.as_str()) == Some("1") {
-                        if let Some(result) = json.get("result") {
-                            // Prefer ProposeGasPrice; values are in Gwei (string floats)
-                            if let Some(p) = result.get("ProposeGasPrice").and_then(|v| v.as_str())
-                            {
-                                if let Ok(gwei_float) = p.parse::<f64>() {
-                                    let wei = (gwei_float * 1e9_f64) as u128;
-                                    tracing::debug!(
-                                        "Etherscan gas price for chain {}: {} gwei ({} wei)",
-                                        chain_id,
-                                        gwei_float,
-                                        wei
-                                    );
-                                    return Ok(format!("0x{:x}", wei));
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!("Etherscan gasoracle JSON parse error: {}", e);
-                }
-            },
-            Err(e) => {
-                tracing::debug!("Etherscan gasoracle request failed: {}", e);
-            }
-        }
-    }
 
-    // Get RPC URL for the chain
     let rpc_url = cfg
         .rpc_url_for_chain(&chain_id.to_string())
         .ok_or_else(|| format!("No RPC URL configured for chain {}", chain_id))?;
 
-    // Create provider for the chain
-    let provider = ProviderBuilder::new().on_http(
-        rpc_url
-            .parse()
-            .map_err(|e| format!("Invalid RPC URL: {}", e))?,
-    );
+    let rpc_endpoint = Url::parse(&rpc_url).map_err(|e| format!("Invalid RPC URL: {}", e))?;
+    let provider = ProviderBuilder::new().on_hyper_http(rpc_endpoint);
 
-    // Fallback: Fetch the current gas price from provider
     match provider.get_gas_price().await {
         Ok(gas_price) => {
             let gas_price_hex = format!("0x{:x}", gas_price);
@@ -258,10 +213,8 @@ async fn fetch_gas_price(chain_id: u64, cfg: &Config) -> Result<String, String> 
             Ok(gas_price_hex)
         }
         Err(e) => {
-            let error_msg = format!("Failed to fetch gas price: {}", e);
-            tracing::warn!("{}", error_msg);
-            // Return default gas price on error
-            Ok("0x4a817c800".to_string()) // 20 gwei fallback
+            tracing::warn!("Failed to fetch gas price for chain {}: {}", chain_id, e);
+            Ok("0x4a817c800".to_string())
         }
     }
 }
@@ -320,14 +273,11 @@ async fn send_relay_transaction(
         .ok_or_else(|| format!("No RPC URL configured for chain {}", chain_id))?;
 
     // Create provider with wallet for signing
+    let rpc_endpoint = Url::parse(&rpc_url).map_err(|e| format!("Invalid RPC URL: {}", e))?;
     let provider = ProviderBuilder::new()
         .with_recommended_fillers()
         .wallet(wallet)
-        .on_http(
-            rpc_url
-                .parse()
-                .map_err(|e| format!("Invalid RPC URL: {}", e))?,
-        );
+        .on_hyper_http(rpc_endpoint);
 
     // Parse wallet address
     let to_address: Address = wallet_address
@@ -457,11 +407,8 @@ async fn simulate_transaction(
     }
 
     // Create provider for the chain
-    let provider = ProviderBuilder::new().on_http(
-        rpc_url
-            .parse()
-            .map_err(|e| format!("Invalid RPC URL: {}", e))?,
-    );
+    let rpc_endpoint = Url::parse(&rpc_url).map_err(|e| format!("Invalid RPC URL: {}", e))?;
+    let provider = ProviderBuilder::new().on_hyper_http(rpc_endpoint);
 
     // Create a transaction request for simulation
     let tx = TransactionRequest::default()
@@ -654,8 +601,8 @@ async fn process_send_transaction(
                 }
             };
 
-            let provider = ProviderBuilder::new().on_http(match rpc_url.parse() {
-                Ok(uri) => uri,
+            let provider = match Url::parse(&rpc_url) {
+                Ok(endpoint) => ProviderBuilder::new().on_hyper_http(endpoint),
                 Err(e) => {
                     tracing::error!(
                         "Invalid RPC URL '{}' for chain {}: {}",
@@ -665,7 +612,7 @@ async fn process_send_transaction(
                     );
                     return Err(jsonrpc_core::Error::internal_error());
                 }
-            });
+            };
 
             let balance = match provider.get_balance(wallet_address).await {
                 Ok(bal) => bal,
@@ -1485,7 +1432,7 @@ async fn build_exchange_rate_response(
 
     // Helper to call a contract view function
     async fn eth_call_bytes(rpc_url: &str, to_address: &str, calldata: &[u8]) -> Option<Vec<u8>> {
-        let provider = ProviderBuilder::new().on_http(rpc_url.parse().ok()?);
+        let provider = ProviderBuilder::new().on_hyper_http(Url::parse(rpc_url).ok()?);
         let to: Address = to_address.parse().ok()?;
         let tx = TransactionRequest::default()
             .to(to)
@@ -2014,7 +1961,7 @@ async fn fetch_and_update_receipt(
         None => return None,
     };
 
-    let provider = ProviderBuilder::new().on_http(rpc_url.parse().ok()?);
+    let provider = ProviderBuilder::new().on_hyper_http(Url::parse(&rpc_url).ok()?);
 
     // alloy's get_transaction_receipt expects a TxHash; parse hex string
     let hash = match tx_hash.strip_prefix("0x") {
