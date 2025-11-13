@@ -7,9 +7,6 @@ FROM rust:1.91 AS builder
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 
-# Update to nightly for edition2024 support
-RUN rustup default nightly
-
 # Install native deps for rocksdb and TLS
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends \
@@ -22,28 +19,29 @@ WORKDIR /app
 
 # Leverage Docker layer caching for dependencies
 # 1) Copy manifests first
-COPY Cargo.toml ./
-# Copy Cargo.lock if it exists, otherwise cargo will generate it
-COPY Cargo.loc[k] ./
+COPY Cargo.toml Cargo.lock ./
+
 # 2) Create a dummy src to satisfy cargo build deps
 RUN mkdir -p src \
  && echo "fn main() {}" > src/main.rs \
- && mkdir -p src/bin \
- && echo "fn main() {}" > src/bin/dummy.rs
+ && mkdir -p examples \
+ && echo "fn main() {}" > examples/dummy.rs
 
-# 3) Clear cargo registry cache and prebuild dependencies
-RUN rm -rf /usr/local/cargo/registry || true && \
-    cargo clean || true
+# 3) Build dependencies only (cached layer)
 RUN --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git-${TARGETPLATFORM},target=/usr/local/cargo/git \
     --mount=type=cache,id=cargo-target-${TARGETPLATFORM},target=/app/target \
-    cargo build --release
+    cargo build --release --locked && \
+    rm src/main.rs examples/dummy.rs
 
 # 4) Now copy the full source and build the actual binary
 COPY . .
-RUN rm -rf /usr/local/cargo/registry/src/index.crates.io-* || true
+
+# 5) Build the actual binary (only rebuilds if source changed)
 RUN --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git-${TARGETPLATFORM},target=/usr/local/cargo/git \
     --mount=type=cache,id=cargo-target-${TARGETPLATFORM},target=/app/target \
-    cargo build --release && \
+    cargo build --release --locked && \
     cp /app/target/release/relayx /app/relayx
 
 # -------- Runtime stage --------
