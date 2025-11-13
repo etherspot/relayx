@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.6
 
 # -------- Builder stage --------
-FROM rust:1.85 AS builder
+FROM rust:1.91 AS builder
 
 # Make buildx platform vars available (for per-arch cache isolation)
 ARG TARGETPLATFORM
