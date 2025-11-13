@@ -45,11 +45,17 @@ RUN --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/car
     cp /app/target/release/relayx /app/relayx
 
 # -------- Runtime stage --------
-FROM debian:bookworm-slim AS runtime
+# Use debian:trixie-slim to match the GLIBC version from rust:1.91 builder
+FROM debian:trixie-slim AS runtime
 
-# Minimal runtime deps
+# Minimal runtime deps (including libc6 and libstdc++6 for GLIBC compatibility)
 RUN apt-get update -y \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      libc6 \
+      libgcc-s1 \
+      libstdc++6 \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
  && update-ca-certificates
 
@@ -70,8 +76,10 @@ ENV HTTP_ADDRESS=0.0.0.0 \
 EXPOSE 4937
 
 # Healthcheck (optional) - using curl instead of wget to save space
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://127.0.0.1:${HTTP_PORT}/ || exit 1
+# Note: Uses default port 4937; override HTTP_PORT env var if using different port
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://127.0.0.1:4937/ || exit 1
 
 # Entrypoint uses CLI flags that mirror envs; config path via RELAYX_CONFIG
+# Using shell form for CMD to allow environment variable substitution
 ENTRYPOINT ["/usr/local/bin/relayx"]
-CMD ["--http-address", "${HTTP_ADDRESS}", "--http-port", "${HTTP_PORT}", "--http-cors", "${HTTP_CORS}"]
+CMD ["--http-address", "0.0.0.0", "--http-port", "4937", "--http-cors", "*"]
