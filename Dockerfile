@@ -1,14 +1,11 @@
 # syntax=docker/dockerfile:1.6
 
 # -------- Builder stage --------
-FROM rust:1.85 AS builder
+FROM rust:1.91 AS builder
 
 # Make buildx platform vars available (for per-arch cache isolation)
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
-
-# Update to nightly for edition2024 support
-RUN rustup default nightly
 
 # Install native deps for rocksdb and TLS
 RUN apt-get update -y \
@@ -22,36 +19,43 @@ WORKDIR /app
 
 # Leverage Docker layer caching for dependencies
 # 1) Copy manifests first
-COPY Cargo.toml ./
-# Copy Cargo.lock if it exists, otherwise cargo will generate it
-COPY Cargo.loc[k] ./
+COPY Cargo.toml Cargo.lock ./
+
 # 2) Create a dummy src to satisfy cargo build deps
 RUN mkdir -p src \
  && echo "fn main() {}" > src/main.rs \
- && mkdir -p src/bin \
- && echo "fn main() {}" > src/bin/dummy.rs
+ && mkdir -p examples \
+ && echo "fn main() {}" > examples/dummy.rs
 
-# 3) Clear cargo registry cache and prebuild dependencies
-RUN rm -rf /usr/local/cargo/registry || true && \
-    cargo clean || true
+# 3) Build dependencies only (cached layer)
 RUN --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git-${TARGETPLATFORM},target=/usr/local/cargo/git \
     --mount=type=cache,id=cargo-target-${TARGETPLATFORM},target=/app/target \
-    cargo build --release
+    cargo build --release --locked && \
+    rm src/main.rs examples/dummy.rs
 
 # 4) Now copy the full source and build the actual binary
 COPY . .
-RUN rm -rf /usr/local/cargo/registry/src/index.crates.io-* || true
+
+# 5) Build the actual binary (only rebuilds if source changed)
 RUN --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git-${TARGETPLATFORM},target=/usr/local/cargo/git \
     --mount=type=cache,id=cargo-target-${TARGETPLATFORM},target=/app/target \
-    cargo build --release && \
+    cargo build --release --locked && \
     cp /app/target/release/relayx /app/relayx
 
 # -------- Runtime stage --------
-FROM debian:bookworm-slim AS runtime
+# Use debian:trixie-slim to match the GLIBC version from rust:1.91 builder
+FROM debian:trixie-slim AS runtime
 
-# Minimal runtime deps
+# Minimal runtime deps (including libc6 and libstdc++6 for GLIBC compatibility)
 RUN apt-get update -y \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      libc6 \
+      libgcc-s1 \
+      libstdc++6 \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
  && update-ca-certificates
 
@@ -72,8 +76,10 @@ ENV HTTP_ADDRESS=0.0.0.0 \
 EXPOSE 4937
 
 # Healthcheck (optional) - using curl instead of wget to save space
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://127.0.0.1:${HTTP_PORT}/ || exit 1
+# Note: Uses default port 4937; override HTTP_PORT env var if using different port
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://127.0.0.1:4937/ || exit 1
 
 # Entrypoint uses CLI flags that mirror envs; config path via RELAYX_CONFIG
+# Using shell form for CMD to allow environment variable substitution
 ENTRYPOINT ["/usr/local/bin/relayx"]
-CMD ["--http-address", "${HTTP_ADDRESS}", "--http-port", "${HTTP_PORT}", "--http-cors", "${HTTP_CORS}"]
+CMD ["--http-address", "0.0.0.0", "--http-port", "4937", "--http-cors", "*"]

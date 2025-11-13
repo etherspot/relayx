@@ -55,6 +55,10 @@ pub struct Config {
     /// Log level: trace, debug, info, warn, error
     #[arg(long = "log-level", env = "LOG_LEVEL", default_value = "debug")]
     pub log_level: String,
+
+    /// Relayer private key used for signing transactions
+    #[arg(long = "relayer-private-key", env = "RELAYX_PRIVATE_KEY")]
+    pub relayer_private_key: Option<String>,
 }
 
 impl Config {
@@ -188,13 +192,39 @@ impl Config {
     pub fn default_token(&self) -> Option<String> {
         // First check environment variable
         if let Ok(token) = std::env::var("RELAYX_DEFAULT_TOKEN") {
-            return Some(token);
+            if !token.is_empty() {
+                return Some(token);
+            }
         }
 
         // Then check config file
         let root = self.get_json_config()?;
         root.get("defaultToken")
             .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// Returns the relayer private key from CLI/env/config, if provided.
+    pub fn get_relayer_private_key(&self) -> Option<String> {
+        if let Some(cli_key) = self
+            .relayer_private_key
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .cloned()
+        {
+            return Some(cli_key);
+        }
+
+        if let Ok(env_key) = std::env::var("RELAYX_PRIVATE_KEY") {
+            if !env_key.is_empty() {
+                return Some(env_key);
+            }
+        }
+
+        let root = self.get_json_config()?;
+        root.get("relayerPrivateKey")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
     }
 

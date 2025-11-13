@@ -374,3 +374,10 @@ pub struct Capabilities {
 pub struct GetCapabilitiesResponse {
     pub capabilities: Capabilities,
 }
+
+pub type FeeDataRequest = ExchangeRateRequest;
+pub type FeeDataQuote = ExchangeRateQuote;
+pub type FeeDataSuccess = ExchangeRateSuccess;
+pub type FeeDataError = ExchangeRateError;
+pub type FeeDataResultItem = ExchangeRateResultItem;
+pub type FeeDataResponse = ExchangeRateResponse;
