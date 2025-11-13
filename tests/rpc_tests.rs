@@ -27,6 +27,8 @@ fn create_test_config(temp_dir: &TempDir) -> Config {
         http_cors: "*".to_string(),
         log_level: "info".to_string(),
         relayer_private_key: None,
+        disable_simulation: false,
+        sentry_dsn: None,
     }
 }
 

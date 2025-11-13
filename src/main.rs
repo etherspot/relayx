@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"))
     } else {
         // Use config value, format to include all modules from relayx crate and dependencies
-        EnvFilter::new(&format!("relayx={},{}", filter_str, filter_str))
+        EnvFilter::new(format!("relayx={},{}", filter_str, filter_str))
     };
 
     tracing_subscriber::fmt()
@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
                 ..Default::default()
             },
         ));
-        
+
         tracing::info!("✓ Sentry initialized successfully (panics will be automatically captured)");
         Some(guard)
     } else {

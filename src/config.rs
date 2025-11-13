@@ -289,10 +289,7 @@ impl Config {
             return true;
         }
         self.get_json_config()
-            .and_then(|v| {
-                v.get("disableSimulation")
-                    .and_then(|s| s.as_bool())
-            })
+            .and_then(|v| v.get("disableSimulation").and_then(|s| s.as_bool()))
             .unwrap_or(false)
     }
 
@@ -308,14 +305,13 @@ impl Config {
             }
         }
 
-        self.get_json_config()
-            .and_then(|v| {
-                v.get("sentryDsn")
-                    .or_else(|| v.get("sentry_dsn"))
-                    .and_then(|s| s.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
-            })
+        self.get_json_config().and_then(|v| {
+            v.get("sentryDsn")
+                .or_else(|| v.get("sentry_dsn"))
+                .and_then(|s| s.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        })
     }
 
     /// Returns the configured Etherscan API key if present in the JSON file.
