@@ -31,7 +31,7 @@ RUN mkdir -p src \
 RUN --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-git-${TARGETPLATFORM},target=/usr/local/cargo/git \
     --mount=type=cache,id=cargo-target-${TARGETPLATFORM},target=/app/target \
-    cargo build --release --locked --frozen && \
+    cargo build --release --locked && \
     rm src/main.rs examples/dummy.rs
 
 # 4) Now copy the full source and build the actual binary
@@ -41,7 +41,7 @@ COPY . .
 RUN --mount=type=cache,id=cargo-registry-${TARGETPLATFORM},target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-git-${TARGETPLATFORM},target=/usr/local/cargo/git \
     --mount=type=cache,id=cargo-target-${TARGETPLATFORM},target=/app/target \
-    cargo build --release --locked --frozen && \
+    cargo build --release --locked && \
     cp /app/target/release/relayx /app/relayx
 
 # -------- Runtime stage --------
