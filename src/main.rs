@@ -12,7 +12,7 @@ async fn main() -> Result<()> {
     let log_level = config.get_log_level();
 
     // Parse the log level string
-    let filter = match log_level.to_lowercase().as_str() {
+    let filter_str = match log_level.to_lowercase().as_str() {
         "trace" => "trace",
         "debug" => "debug",
         "info" => "info",
@@ -24,18 +24,46 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Initialize logging with the configured level
+    // Initialize logging - respect RUST_LOG env var first, then use config
+    // Format: "relayx=level" to include all logs from the relayx crate
+    let env_filter = if std::env::var("RUST_LOG").is_ok() {
+        // RUST_LOG is set, use it
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"))
+    } else {
+        // Use config value, format to include all modules from relayx crate and dependencies
+        EnvFilter::new(&format!("relayx={},{}", filter_str, filter_str))
+    };
+
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(filter))
+        .with_env_filter(env_filter)
         .with_target(true)
         .with_thread_ids(false)
         .with_file(false)
         .with_line_number(false)
         .init();
 
+    // Initialize Sentry if DSN is provided (after tracing is set up)
+    // Note: With the "panic" feature enabled, panics are automatically captured
+    let _sentry_guard = if let Some(dsn) = config.get_sentry_dsn() {
+        tracing::info!("Initializing Sentry error tracking");
+        let guard = sentry::init((
+            dsn.as_str(),
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                ..Default::default()
+            },
+        ));
+        
+        tracing::info!("✓ Sentry initialized successfully (panics will be automatically captured)");
+        Some(guard)
+    } else {
+        tracing::debug!("Sentry DSN not provided, skipping error tracking initialization");
+        None
+    };
+
     tracing::info!("Starting RelayX service");
     tracing::debug!("Configuration: {:?}", config);
-    tracing::info!("Log level set to: {}", filter);
+    tracing::info!("Log level set to: {}", filter_str);
 
     // Initialize storage
     tracing::info!("Initializing storage at: {:?}", config.db_path);
