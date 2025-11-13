@@ -1,29 +1,47 @@
-name: Build Relayx Docker image
+name: Build and Publish Relayx Docker Image
 
 on:
   push:
     branches:
-      - "master"
+      - master
+      - main
     tags:
       - "v*"
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  DOCKER_BUILDKIT: 1
+  IMAGE_NAME: etherspot/relayx
 
 jobs:
   build-and-push-relayx:
     runs-on: ubuntu-latest
     steps:
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Get version from Cargo.toml
-        id: get_version
+      - name: Determine version
+        id: version
         run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            # Extract version from git tag (remove 'v' prefix if present)
+            VERSION=${GITHUB_REF#refs/tags/}
+            VERSION=${VERSION#v}
+          elif [[ "${{ github.event_name }}" == "release" ]]; then
+            # Use release tag name
+            VERSION=${GITHUB_REF#refs/tags/}
+            VERSION=${VERSION#v}
+          else
+            # Fallback to Cargo.toml version
+            VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "Version: ${VERSION}"
 
@@ -33,24 +51,24 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push Relayx Docker image
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
           tags: |
-            etherspot/relayx:${{ steps.get_version.outputs.version }}
-            etherspot/relayx:latest
-          platforms: linux/amd64,linux/arm64
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_NAME }}:latest
+          platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: "marvinpinto/action-automatic-releases@6273874b61ebc8c71f1a61b2d98e234cf389b303"
+        if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
+        uses: "marvinpinto/action-automatic-releases@latest"
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          automatic_release_tag: ${{ steps.get_version.outputs.version }}
+          automatic_release_tag: ${{ steps.version.outputs.version }}
           prerelease: false
-          title: Relayx ${{ steps.get_version.outputs.version }}
+          title: Relayx ${{ steps.version.outputs.version }}
