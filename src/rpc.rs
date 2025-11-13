@@ -74,6 +74,19 @@ fn simulation_failed_error() -> jsonrpc_core::Error {
     err
 }
 
+/// Capture an error in Sentry with context
+fn capture_sentry_error(endpoint: &str, error: &jsonrpc_core::Error) {
+    sentry::configure_scope(|scope| {
+        scope.set_tag("endpoint", endpoint);
+        scope.set_tag("error_code", format!("{:?}", error.code));
+        scope.set_extra("error_message", error.message.clone().into());
+    });
+    sentry::capture_message(
+        &format!("{} error: {}", endpoint, error.message),
+        sentry::Level::Error,
+    );
+}
+
 fn validate_authorization_list(
     authorization_list: &str,
     chain_id: u64,
@@ -341,6 +354,8 @@ async fn send_relay_transaction(
         Err(e) => {
             let error_msg = format!("Failed to send transaction: {}", e);
             tracing::error!("{}", error_msg);
+            // Capture critical transaction sending errors in Sentry
+            sentry::capture_message(&error_msg, sentry::Level::Error);
             Err(error_msg)
         }
     }
@@ -348,12 +363,22 @@ async fn send_relay_transaction(
 
 /// Simulate a transaction and estimate gas consumption
 /// Returns the estimated gas on success
+/// If simulation is disabled, returns a default gas limit
 async fn simulate_transaction(
     wallet_address: &str,
     calldata: &str,
     chain_id: u64,
     cfg: &Config,
 ) -> Result<u64, String> {
+    if cfg.is_simulation_disabled() {
+        tracing::debug!(
+            "Simulation disabled: using default gas limit for wallet {} on chain {}",
+            wallet_address,
+            chain_id
+        );
+        return Ok(150_000);
+    }
+
     if stub_mode_enabled() {
         tracing::debug!(
             "Stub mode enabled: skipping on-chain simulation for wallet {} on chain {}",
@@ -534,13 +559,23 @@ async fn process_send_transaction(
             gas
         }
         Err(e) => {
-            tracing::warn!(
-                "Pre-relay simulation failed for wallet {} on chain {}: {}",
-                input.to,
-                chain_id,
-                e
-            );
-            return Err(simulation_failed_error());
+            // If simulation is disabled, use default gas limit instead of failing
+            if cfg.is_simulation_disabled() {
+                tracing::debug!(
+                    "Simulation disabled: using default gas limit for wallet {} on chain {}",
+                    input.to,
+                    chain_id
+                );
+                150_000 // Default gas limit
+            } else {
+                tracing::warn!(
+                    "Pre-relay simulation failed for wallet {} on chain {}: {}",
+                    input.to,
+                    chain_id,
+                    e
+                );
+                return Err(simulation_failed_error());
+            }
         }
     };
 
@@ -792,6 +827,16 @@ async fn process_send_transaction(
                 e
             );
 
+            // Capture critical transaction relay failure in Sentry
+            sentry::configure_scope(|scope| {
+                scope.set_tag("transaction_id", &transaction_id);
+                scope.set_extra("error", e.clone().into());
+            });
+            sentry::capture_message(
+                &format!("Failed to send relay transaction: {}", e),
+                sentry::Level::Error,
+            );
+
             // Update storage with error status
             if let Err(update_err) = storage
                 .update_request_status(relayer_request.id, RequestStatus::Failed, Some(e.clone()))
@@ -976,12 +1021,21 @@ async fn process_send_transaction_multichain(
                 gas
             }
             Err(e) => {
-                tracing::warn!(
-                    "Transaction {}: Simulation failed, using default gas limit: {}",
-                    idx,
-                    e
-                );
-                21000 // Use default if simulation fails
+                // If simulation is disabled, use default gas limit instead of failing
+                if cfg.is_simulation_disabled() {
+                    tracing::debug!(
+                        "Transaction {}: Simulation disabled, using default gas limit",
+                        idx
+                    );
+                    150_000 // Default gas limit
+                } else {
+                    tracing::warn!(
+                        "Transaction {}: Simulation failed, using default gas limit: {}",
+                        idx,
+                        e
+                    );
+                    150_000 // Use default if simulation fails
+                }
             }
         };
 
@@ -1628,18 +1682,65 @@ impl RpcServer {
             let cfg = cfg1.clone();
 
             async move {
+                tracing::info!("[relayer_sendTransaction] Request received");
+                if let Ok(params_json) = serde_json::to_string(&params) {
+                    tracing::debug!("[relayer_sendTransaction] Request params: {}", params_json);
+                }
+
                 let inputs: Vec<SendTransactionRequest> =
                     params.parse::<Vec<SendTransactionRequest>>().map_err(|e| {
-                        tracing::warn!("Failed to parse relayer_sendTransaction params: {}", e);
-                        invalid_params_error()
+                        tracing::warn!("[relayer_sendTransaction] Failed to parse params: {}", e);
+                        let err = invalid_params_error();
+                        tracing::error!(
+                            "[relayer_sendTransaction] Error response: code={:?}, message={}",
+                            err.code,
+                            err.message
+                        );
+                        capture_sentry_error("relayer_sendTransaction", &err);
+                        err
                     })?;
                 let input = inputs.first().ok_or_else(|| {
-                    tracing::warn!("relayer_sendTransaction missing params: expected one object");
-                    invalid_params_error()
+                    tracing::warn!("[relayer_sendTransaction] Missing params: expected one object");
+                    let err = invalid_params_error();
+                    tracing::error!(
+                        "[relayer_sendTransaction] Error response: code={:?}, message={}",
+                        err.code,
+                        err.message
+                    );
+                    err
                 })?;
 
-                let response = process_send_transaction(storage, input, &cfg).await?;
-                serde_json::to_value(response).map_err(|_| jsonrpc_core::Error::internal_error())
+                match process_send_transaction(storage, input, &cfg).await {
+                    Ok(response) => {
+                        if let Ok(response_json) = serde_json::to_string(&response) {
+                            tracing::info!(
+                                "[relayer_sendTransaction] Success response: {}",
+                                response_json
+                            );
+                        } else {
+                            tracing::info!(
+                                "[relayer_sendTransaction] Success response (serialization failed)"
+                            );
+                        }
+                        serde_json::to_value(response).map_err(|e| {
+                            tracing::error!(
+                                "[relayer_sendTransaction] Failed to serialize response: {}",
+                                e
+                            );
+                            jsonrpc_core::Error::internal_error()
+                        })
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "[relayer_sendTransaction] Error response: code={:?}, message={}",
+                            e.code,
+                            e.message
+                        );
+                        // Capture error in Sentry
+                        capture_sentry_error("relayer_sendTransaction", &e);
+                        Err(e)
+                    }
+                }
             }
         });
 
@@ -1654,17 +1755,45 @@ impl RpcServer {
                 let cfg = cfg1b.clone();
 
                 async move {
+                    tracing::info!("[relayer_sendTransactionMultichain] Request received");
+                    if let Ok(params_json) = serde_json::to_string(&params) {
+                        tracing::debug!("[relayer_sendTransactionMultichain] Request params: {}", params_json);
+                    }
+
                     let inputs: Vec<SendTransactionMultichainRequest> = params
                         .parse::<Vec<SendTransactionMultichainRequest>>()
-                        .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
+                        .map_err(|e| {
+                            tracing::warn!("[relayer_sendTransactionMultichain] Failed to parse params: {}", e);
+                            let err = jsonrpc_core::Error::invalid_params(e.to_string());
+                            tracing::error!("[relayer_sendTransactionMultichain] Error response: code={:?}, message={}", err.code, err.message);
+                            capture_sentry_error("relayer_sendTransactionMultichain", &err);
+                            err
+                        })?;
                     let input = inputs.first().ok_or_else(|| {
-                        jsonrpc_core::Error::invalid_params("missing params: expected one object")
+                        tracing::warn!("[relayer_sendTransactionMultichain] Missing params: expected one object");
+                        let err = jsonrpc_core::Error::invalid_params("missing params: expected one object");
+                        tracing::error!("[relayer_sendTransactionMultichain] Error response: code={:?}, message={}", err.code, err.message);
+                        err
                     })?;
 
-                    let response =
-                        process_send_transaction_multichain(storage, input, &cfg).await?;
-                    serde_json::to_value(response)
-                        .map_err(|_| jsonrpc_core::Error::internal_error())
+                    match process_send_transaction_multichain(storage, input, &cfg).await {
+                        Ok(response) => {
+                            if let Ok(response_json) = serde_json::to_string(&response) {
+                                tracing::info!("[relayer_sendTransactionMultichain] Success response: {}", response_json);
+                            } else {
+                                tracing::info!("[relayer_sendTransactionMultichain] Success response (serialization failed)");
+                            }
+                            serde_json::to_value(response).map_err(|e| {
+                                tracing::error!("[relayer_sendTransactionMultichain] Failed to serialize response: {}", e);
+                                jsonrpc_core::Error::internal_error()
+                            })
+                        }
+                        Err(e) => {
+                            tracing::error!("[relayer_sendTransactionMultichain] Error response: code={:?}, message={}", e.code, e.message);
+                            capture_sentry_error("relayer_sendTransactionMultichain", &e);
+                            Err(e)
+                        }
+                    }
                 }
             },
         );
@@ -1678,12 +1807,54 @@ impl RpcServer {
             let cfg = cfg2.clone();
 
             async move {
-                let request: GetStatusRequest = params
-                    .parse::<GetStatusRequest>()
-                    .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
+                tracing::info!("[relayer_getStatus] Request received");
+                if let Ok(params_json) = serde_json::to_string(&params) {
+                    tracing::debug!("[relayer_getStatus] Request params: {}", params_json);
+                }
 
-                let response = process_get_status(storage, &request, &cfg).await?;
-                serde_json::to_value(response).map_err(|_| jsonrpc_core::Error::internal_error())
+                let request: GetStatusRequest =
+                    params.parse::<GetStatusRequest>().map_err(|e| {
+                        tracing::warn!("[relayer_getStatus] Failed to parse params: {}", e);
+                        let err = jsonrpc_core::Error::invalid_params(e.to_string());
+                        tracing::error!(
+                            "[relayer_getStatus] Error response: code={:?}, message={}",
+                            err.code,
+                            err.message
+                        );
+                        capture_sentry_error("relayer_getStatus", &err);
+                        err
+                    })?;
+
+                match process_get_status(storage, &request, &cfg).await {
+                    Ok(response) => {
+                        if let Ok(response_json) = serde_json::to_string(&response) {
+                            tracing::info!(
+                                "[relayer_getStatus] Success response: {}",
+                                response_json
+                            );
+                        } else {
+                            tracing::info!(
+                                "[relayer_getStatus] Success response (serialization failed)"
+                            );
+                        }
+                        serde_json::to_value(response).map_err(|e| {
+                            tracing::error!(
+                                "[relayer_getStatus] Failed to serialize response: {}",
+                                e
+                            );
+                            jsonrpc_core::Error::internal_error()
+                        })
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "[relayer_getStatus] Error response: code={:?}, message={}",
+                            e.code,
+                            e.message
+                        );
+                        capture_sentry_error("relayer_getStatus", &e);
+                        Err(e)
+                    }
+                }
             }
         });
 
@@ -1696,9 +1867,32 @@ impl RpcServer {
             let cfg = cfg3.clone();
 
             async move {
-                let health = process_health_check(storage, &cfg).await?;
+                tracing::info!("[health_check] Request received");
 
-                serde_json::to_value(health).map_err(|_| jsonrpc_core::Error::internal_error())
+                match process_health_check(storage, &cfg).await {
+                    Ok(health) => {
+                        if let Ok(health_json) = serde_json::to_string(&health) {
+                            tracing::info!("[health_check] Success response: {}", health_json);
+                        } else {
+                            tracing::info!(
+                                "[health_check] Success response (serialization failed)"
+                            );
+                        }
+                        serde_json::to_value(health).map_err(|e| {
+                            tracing::error!("[health_check] Failed to serialize response: {}", e);
+                            jsonrpc_core::Error::internal_error()
+                        })
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "[health_check] Error response: code={:?}, message={}",
+                            e.code,
+                            e.message
+                        );
+                        capture_sentry_error("health_check", &e);
+                        Err(e)
+                    }
+                }
             }
         });
 
@@ -1708,16 +1902,54 @@ impl RpcServer {
         io.add_method("relayer_getExchangeRate", move |params: Params| {
             let cfg = cfg4.clone();
             async move {
+                tracing::info!("[relayer_getExchangeRate] Request received");
+                if let Ok(params_json) = serde_json::to_string(&params) {
+                    tracing::debug!("[relayer_getExchangeRate] Request params: {}", params_json);
+                }
+
                 let inputs: Vec<ExchangeRateRequest> =
-                    params
-                        .parse::<Vec<ExchangeRateRequest>>()
-                        .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
+                    params.parse::<Vec<ExchangeRateRequest>>().map_err(|e| {
+                        tracing::warn!("[relayer_getExchangeRate] Failed to parse params: {}", e);
+                        let err = jsonrpc_core::Error::invalid_params(e.to_string());
+                        tracing::error!(
+                            "[relayer_getExchangeRate] Error response: code={:?}, message={}",
+                            err.code,
+                            err.message
+                        );
+                        capture_sentry_error("relayer_getExchangeRate", &err);
+                        err
+                    })?;
                 let input = inputs.first().ok_or_else(|| {
-                    jsonrpc_core::Error::invalid_params("missing params: expected one object")
+                    tracing::warn!("[relayer_getExchangeRate] Missing params: expected one object");
+                    let err =
+                        jsonrpc_core::Error::invalid_params("missing params: expected one object");
+                    tracing::error!(
+                        "[relayer_getExchangeRate] Error response: code={:?}, message={}",
+                        err.code,
+                        err.message
+                    );
+                    capture_sentry_error("relayer_getExchangeRate", &err);
+                    err
                 })?;
 
                 let payload = build_exchange_rate_response(&cfg, input).await;
-                serde_json::to_value(payload).map_err(|_| jsonrpc_core::Error::internal_error())
+                if let Ok(payload_json) = serde_json::to_string(&payload) {
+                    tracing::info!(
+                        "[relayer_getExchangeRate] Success response: {}",
+                        payload_json
+                    );
+                } else {
+                    tracing::info!(
+                        "[relayer_getExchangeRate] Success response (serialization failed)"
+                    );
+                }
+                serde_json::to_value(payload).map_err(|e| {
+                    tracing::error!(
+                        "[relayer_getExchangeRate] Failed to serialize response: {}",
+                        e
+                    );
+                    jsonrpc_core::Error::internal_error()
+                })
             }
         });
 
@@ -1727,11 +1959,34 @@ impl RpcServer {
         io.add_method("relayer_getQuote", move |params: Params| {
             let cfg = cfg6.clone();
             async move {
-                let inputs: Vec<QuoteRequest> = params
-                    .parse::<Vec<QuoteRequest>>()
-                    .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
+                tracing::info!("[relayer_getQuote] Request received");
+                if let Ok(params_json) = serde_json::to_string(&params) {
+                    tracing::debug!("[relayer_getQuote] Request params: {}", params_json);
+                }
+
+                let inputs: Vec<QuoteRequest> =
+                    params.parse::<Vec<QuoteRequest>>().map_err(|e| {
+                        tracing::warn!("[relayer_getQuote] Failed to parse params: {}", e);
+                        let err = jsonrpc_core::Error::invalid_params(e.to_string());
+                        tracing::error!(
+                            "[relayer_getQuote] Error response: code={:?}, message={}",
+                            err.code,
+                            err.message
+                        );
+                        capture_sentry_error("relayer_getQuote", &err);
+                        err
+                    })?;
                 let input = inputs.first().ok_or_else(|| {
-                    jsonrpc_core::Error::invalid_params("missing params: expected one object")
+                    tracing::warn!("[relayer_getQuote] Missing params: expected one object");
+                    let err =
+                        jsonrpc_core::Error::invalid_params("missing params: expected one object");
+                    tracing::error!(
+                        "[relayer_getQuote] Error response: code={:?}, message={}",
+                        err.code,
+                        err.message
+                    );
+                    capture_sentry_error("relayer_getQuote", &err);
+                    err
                 })?;
 
                 // Minimal realistic quote: estimate gas and use current gas price
@@ -1774,7 +2029,15 @@ impl RpcServer {
                     revert_reason: "".to_string(),
                 };
 
-                serde_json::to_value(payload).map_err(|_| jsonrpc_core::Error::internal_error())
+                if let Ok(payload_json) = serde_json::to_string(&payload) {
+                    tracing::info!("[relayer_getQuote] Success response: {}", payload_json);
+                } else {
+                    tracing::info!("[relayer_getQuote] Success response (serialization failed)");
+                }
+                serde_json::to_value(payload).map_err(|e| {
+                    tracing::error!("[relayer_getQuote] Failed to serialize response: {}", e);
+                    jsonrpc_core::Error::internal_error()
+                })
             }
         });
 
@@ -1787,9 +2050,38 @@ impl RpcServer {
             let cfg = cfg5.clone();
 
             async move {
-                let capabilities = process_get_capabilities(storage, &cfg).await?;
-                serde_json::to_value(capabilities)
-                    .map_err(|_| jsonrpc_core::Error::internal_error())
+                tracing::info!("[relayer_getCapabilities] Request received");
+
+                match process_get_capabilities(storage, &cfg).await {
+                    Ok(capabilities) => {
+                        if let Ok(capabilities_json) = serde_json::to_string(&capabilities) {
+                            tracing::info!(
+                                "[relayer_getCapabilities] Success response: {}",
+                                capabilities_json
+                            );
+                        } else {
+                            tracing::info!(
+                                "[relayer_getCapabilities] Success response (serialization failed)"
+                            );
+                        }
+                        serde_json::to_value(capabilities).map_err(|e| {
+                            tracing::error!(
+                                "[relayer_getCapabilities] Failed to serialize response: {}",
+                                e
+                            );
+                            jsonrpc_core::Error::internal_error()
+                        })
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "[relayer_getCapabilities] Error response: code={:?}, message={}",
+                            e.code,
+                            e.message
+                        );
+                        capture_sentry_error("relayer_getCapabilities", &e);
+                        Err(e)
+                    }
+                }
             }
         });
 
@@ -1799,15 +2091,46 @@ impl RpcServer {
         io.add_method("relayer_getFeeData", move |params: Params| {
             let cfg = cfg_fee.clone();
             async move {
-                let inputs: Vec<FeeDataRequest> = params
-                    .parse::<Vec<FeeDataRequest>>()
-                    .map_err(|e| jsonrpc_core::Error::invalid_params(e.to_string()))?;
+                tracing::info!("[relayer_getFeeData] Request received");
+                if let Ok(params_json) = serde_json::to_string(&params) {
+                    tracing::debug!("[relayer_getFeeData] Request params: {}", params_json);
+                }
+
+                let inputs: Vec<FeeDataRequest> =
+                    params.parse::<Vec<FeeDataRequest>>().map_err(|e| {
+                        tracing::warn!("[relayer_getFeeData] Failed to parse params: {}", e);
+                        let err = jsonrpc_core::Error::invalid_params(e.to_string());
+                        tracing::error!(
+                            "[relayer_getFeeData] Error response: code={:?}, message={}",
+                            err.code,
+                            err.message
+                        );
+                        capture_sentry_error("relayer_getFeeData", &err);
+                        err
+                    })?;
                 let input = inputs.first().ok_or_else(|| {
-                    jsonrpc_core::Error::invalid_params("missing params: expected one object")
+                    tracing::warn!("[relayer_getFeeData] Missing params: expected one object");
+                    let err =
+                        jsonrpc_core::Error::invalid_params("missing params: expected one object");
+                    tracing::error!(
+                        "[relayer_getFeeData] Error response: code={:?}, message={}",
+                        err.code,
+                        err.message
+                    );
+                    capture_sentry_error("relayer_getFeeData", &err);
+                    err
                 })?;
 
                 let payload = build_exchange_rate_response(&cfg, input).await;
-                serde_json::to_value(payload).map_err(|_| jsonrpc_core::Error::internal_error())
+                if let Ok(payload_json) = serde_json::to_string(&payload) {
+                    tracing::info!("[relayer_getFeeData] Success response: {}", payload_json);
+                } else {
+                    tracing::info!("[relayer_getFeeData] Success response (serialization failed)");
+                }
+                serde_json::to_value(payload).map_err(|e| {
+                    tracing::error!("[relayer_getFeeData] Failed to serialize response: {}", e);
+                    jsonrpc_core::Error::internal_error()
+                })
             }
         });
 
@@ -2049,6 +2372,8 @@ mod tests {
             http_cors: "*".to_string(),
             log_level: "debug".to_string(),
             relayer_private_key: None,
+            disable_simulation: false,
+            sentry_dsn: None,
         }
     }
 

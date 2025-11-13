@@ -59,6 +59,14 @@ pub struct Config {
     /// Relayer private key used for signing transactions
     #[arg(long = "relayer-private-key", env = "RELAYX_PRIVATE_KEY")]
     pub relayer_private_key: Option<String>,
+
+    /// Disable transaction simulation (use default gas limit instead)
+    #[arg(long = "disable-simulation", env = "RELAYX_DISABLE_SIMULATION")]
+    pub disable_simulation: bool,
+
+    /// Sentry DSN for error tracking (optional)
+    #[arg(long = "sentry-dsn", env = "SENTRY_DSN")]
+    pub sentry_dsn: Option<String>,
 }
 
 impl Config {
@@ -273,6 +281,37 @@ impl Config {
                     .map(|s| s.to_string())
             })
             .unwrap_or_else(|| self.log_level.clone())
+    }
+
+    /// Check if simulation is disabled (from config.json or CLI/env)
+    pub fn is_simulation_disabled(&self) -> bool {
+        if self.disable_simulation {
+            return true;
+        }
+        self.get_json_config()
+            .and_then(|v| v.get("disableSimulation").and_then(|s| s.as_bool()))
+            .unwrap_or(false)
+    }
+
+    /// Get Sentry DSN from config.json or CLI/env
+    pub fn get_sentry_dsn(&self) -> Option<String> {
+        if let Some(cli_dsn) = self.sentry_dsn.as_ref().filter(|s| !s.is_empty()) {
+            return Some(cli_dsn.clone());
+        }
+
+        if let Ok(env_dsn) = std::env::var("SENTRY_DSN") {
+            if !env_dsn.is_empty() {
+                return Some(env_dsn);
+            }
+        }
+
+        self.get_json_config().and_then(|v| {
+            v.get("sentryDsn")
+                .or_else(|| v.get("sentry_dsn"))
+                .and_then(|s| s.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        })
     }
 
     /// Returns the configured Etherscan API key if present in the JSON file.
