@@ -531,6 +531,14 @@ async fn process_single_transaction(
     // Resolve task ID (generate or validate client-provided)
     let task_id = resolve_task_id(params.task_id.as_deref(), storage)?;
 
+    // Extract optional callback URL from context.callbackUrl
+    let callback_url = params
+        .context
+        .as_ref()
+        .and_then(|ctx| ctx.get("callbackUrl"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     let internal_id = Uuid::new_v4();
 
     let relayer_request = RelayerRequest {
@@ -549,6 +557,7 @@ async fn process_single_transaction(
         created_at: Utc::now(),
         updated_at: Utc::now(),
         error_message: None,
+        callback_url,
     };
 
     storage.create_request(relayer_request.clone()).await.map_err(|e| {
@@ -580,8 +589,20 @@ async fn process_single_transaction(
             tracing::error!("Relay failed for task_id {}: {}", task_id, e);
             sentry::capture_message(&format!("Relay failed: {}", e), sentry::Level::Error);
             let _ = storage
-                .update_request_status(internal_id, RequestStatus::Failed, Some(e))
+                .update_request_status(internal_id, RequestStatus::Failed, Some(e.clone()))
                 .await;
+            if relayer_request.callback_url.is_some() {
+                let status_resp = SpecStatusResponse {
+                    chain_id: chain_id.to_string(),
+                    created_at: relayer_request.created_at.timestamp() as u64,
+                    status: 400,
+                    hash: None,
+                    receipt: None,
+                    message: Some(e),
+                    data: None,
+                };
+                fire_callback(&relayer_request, &status_resp).await;
+            }
         }
     }
 
@@ -1336,8 +1357,20 @@ impl RpcServer {
                                                     }
                                                     Err(e) => {
                                                         let _ = storage_bg
-                                                            .update_request_status(req.id, RequestStatus::Failed, Some(e))
+                                                            .update_request_status(req.id, RequestStatus::Failed, Some(e.clone()))
                                                             .await;
+                                                        if req.callback_url.is_some() {
+                                                            let status_resp = SpecStatusResponse {
+                                                                chain_id: req.chain_id.to_string(),
+                                                                created_at: req.created_at.timestamp() as u64,
+                                                                status: 400,
+                                                                hash: None,
+                                                                receipt: None,
+                                                                message: Some(e),
+                                                                data: None,
+                                                            };
+                                                            fire_callback(&req, &status_resp).await;
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1353,6 +1386,44 @@ impl RpcServer {
 
         server.wait();
         Ok(())
+    }
+}
+
+/// POST the final status payload to the callback URL registered for a request.
+///
+/// The payload mirrors the `relayer_getStatus` response, with `taskId` added at the top level.
+/// Failures are logged and silently swallowed — a failed callback never affects the relay flow.
+async fn fire_callback(req: &RelayerRequest, status: &SpecStatusResponse) {
+    let url = match &req.callback_url {
+        Some(u) => u.clone(),
+        None => return,
+    };
+
+    #[derive(serde::Serialize)]
+    struct CallbackPayload<'a> {
+        #[serde(rename = "taskId")]
+        task_id: &'a str,
+        #[serde(flatten)]
+        status: &'a SpecStatusResponse,
+    }
+
+    let payload = CallbackPayload {
+        task_id: &req.task_id,
+        status,
+    };
+
+    match reqwest::Client::new().post(&url).json(&payload).send().await {
+        Ok(resp) => {
+            tracing::info!(
+                "Callback delivered for task_id {} → {} (HTTP {})",
+                req.task_id,
+                url,
+                resp.status()
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Callback failed for task_id {} → {}: {}", req.task_id, url, e);
+        }
     }
 }
 
@@ -1404,11 +1475,32 @@ async fn fetch_and_store_receipt(
             if status_ok {
                 let _ = storage.store_receipt(req.id, &receipt).await;
                 let _ = storage.update_request_status(req.id, RequestStatus::Completed, None).await;
+                let status_resp = SpecStatusResponse {
+                    chain_id: req.chain_id.to_string(),
+                    created_at: req.created_at.timestamp() as u64,
+                    status: 200,
+                    hash: Some(receipt.transaction_hash.clone()),
+                    receipt: Some(receipt.clone()),
+                    message: None,
+                    data: None,
+                };
+                fire_callback(req, &status_resp).await;
                 Some(receipt)
             } else {
+                let msg = "onchain revert".to_string();
                 let _ = storage
-                    .update_request_status(req.id, RequestStatus::Failed, Some("onchain revert".to_string()))
+                    .update_request_status(req.id, RequestStatus::Failed, Some(msg.clone()))
                     .await;
+                let status_resp = SpecStatusResponse {
+                    chain_id: req.chain_id.to_string(),
+                    created_at: req.created_at.timestamp() as u64,
+                    status: 500,
+                    hash: req.transaction_hash.clone(),
+                    receipt: None,
+                    message: Some(msg),
+                    data: None,
+                };
+                fire_callback(req, &status_resp).await;
                 None
             }
         }
@@ -1688,6 +1780,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             error_message: None,
+            callback_url: None,
         };
         storage.create_request(request).await.unwrap();
 

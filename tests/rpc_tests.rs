@@ -391,6 +391,7 @@ mod storage_tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             error_message: None,
+            callback_url: None,
         }
     }
 

@@ -31,6 +31,9 @@ pub struct RelayerRequest {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub error_message: Option<String>,
+    /// Optional webhook URL to POST the final status to when the transaction settles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
