@@ -5,7 +5,7 @@ use rocksdb::{DBWithThreadMode, MultiThreaded, Options};
 use serde_json;
 use uuid::Uuid;
 
-use crate::types::{RelayerRequest, RelayerResponse, RequestStatus, Resubmission};
+use crate::types::{RelayerRequest, RelayerResponse, RequestStatus, Resubmission, SpecReceipt};
 
 pub struct Storage {
     db: Arc<DBWithThreadMode<MultiThreaded>>,
@@ -50,6 +50,11 @@ impl Storage {
             e
         })?;
 
+        // Maintain task_id -> uuid secondary index
+        let idx_key = format!("taskid:{}", request.task_id);
+        self.db
+            .put(idx_key.as_bytes(), request.id.to_string().as_bytes())?;
+
         tracing::trace!("Request {} stored successfully", request.id);
         Ok(())
     }
@@ -57,15 +62,16 @@ impl Storage {
     /// Create and store a new relayer request
     pub async fn create_request(&self, request: RelayerRequest) -> Result<()> {
         tracing::debug!(
-            "Creating request: {} - Status: {:?}, Chain: {}",
+            "Creating request: {} (task_id: {}) - Status: {:?}, Chain: {}",
             request.id,
+            request.task_id,
             request.status,
             request.chain_id
         );
         self.store_request(&request).await
     }
 
-    /// Retrieve a relayer request by ID
+    /// Retrieve a relayer request by UUID
     pub async fn get_request(&self, id: Uuid) -> Result<Option<RelayerRequest>> {
         let key = format!("request:{}", id);
         tracing::trace!("Retrieving request with key: {}", key);
@@ -90,6 +96,30 @@ impl Storage {
         }
     }
 
+    /// Resolve a task_id to a UUID, then retrieve the request.
+    pub async fn get_request_by_task_id(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<RelayerRequest>> {
+        let idx_key = format!("taskid:{}", task_id);
+        match self.db.get(idx_key.as_bytes())? {
+            Some(uuid_bytes) => {
+                let uuid_str = String::from_utf8_lossy(&uuid_bytes);
+                match Uuid::parse_str(&uuid_str) {
+                    Ok(uuid) => self.get_request(uuid).await,
+                    Err(_) => Ok(None),
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Check whether a task_id is already in use.
+    pub fn task_id_exists(&self, task_id: &str) -> bool {
+        let idx_key = format!("taskid:{}", task_id);
+        self.db.get(idx_key.as_bytes()).ok().flatten().is_some()
+    }
+
     /// Store a relayer response
     pub async fn store_response(&self, response: &RelayerResponse) -> Result<()> {
         let key = format!("response:{}", response.request_id);
@@ -107,6 +137,27 @@ impl Storage {
             Some(value) => {
                 let response: RelayerResponse = serde_json::from_slice(&value)?;
                 Ok(Some(response))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Store a receipt for a completed request.
+    pub async fn store_receipt(&self, request_id: Uuid, receipt: &SpecReceipt) -> Result<()> {
+        let key = format!("receipt:{}", request_id);
+        let value = serde_json::to_string(receipt)?;
+        self.db.put(key.as_bytes(), value.as_bytes())?;
+        tracing::debug!("Receipt stored for request {}", request_id);
+        Ok(())
+    }
+
+    /// Retrieve a previously stored receipt.
+    pub async fn get_receipt(&self, request_id: Uuid) -> Result<Option<SpecReceipt>> {
+        let key = format!("receipt:{}", request_id);
+        match self.db.get(key.as_bytes())? {
+            Some(value) => {
+                let receipt: SpecReceipt = serde_json::from_slice(&value)?;
+                Ok(Some(receipt))
             }
             None => Ok(None),
         }
@@ -205,7 +256,7 @@ impl Storage {
         Ok(items)
     }
 
-    /// Get all requests with optional filtering
+    /// Get all requests with optional limit
     pub async fn get_requests(&self, limit: Option<usize>) -> Result<Vec<RelayerRequest>> {
         tracing::debug!("Retrieving requests with limit: {:?}", limit);
 

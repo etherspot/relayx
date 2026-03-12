@@ -272,6 +272,19 @@ impl Config {
         self.rpc_url_for_chain(&chain_id.to_string()).is_some()
     }
 
+    /// Returns all chain IDs that have an RPC URL configured.
+    pub fn supported_chain_ids(&self) -> Vec<String> {
+        let root = match self.get_json_config() {
+            Some(v) => v,
+            None => return vec![],
+        };
+        let mut ids = Vec::new();
+        if let Some(rpcs) = root.get("rpcs").and_then(|v| v.as_object()) {
+            ids.extend(rpcs.keys().cloned());
+        }
+        ids
+    }
+
     /// Get the effective log level from config.json or CLI
     pub fn get_log_level(&self) -> String {
         self.get_json_config()

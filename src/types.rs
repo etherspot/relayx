@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Request status enumeration
+// ===== Internal storage types (unchanged) =====
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum RequestStatus {
     Pending,
@@ -11,10 +14,10 @@ pub enum RequestStatus {
     Failed,
 }
 
-/// Relayer request structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayerRequest {
     pub id: Uuid,
+    pub task_id: String,
     pub from_address: String,
     pub to_address: String,
     pub amount: String,
@@ -30,7 +33,6 @@ pub struct RelayerRequest {
     pub error_message: Option<String>,
 }
 
-/// Relayer response structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayerResponse {
     pub request_id: Uuid,
@@ -42,7 +44,6 @@ pub struct RelayerResponse {
     pub error_message: Option<String>,
 }
 
-/// New request input structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewRequestInput {
     pub from_address: String,
@@ -55,7 +56,6 @@ pub struct NewRequestInput {
     pub chain_id: u64,
 }
 
-/// Request query parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestQuery {
     pub status: Option<RequestStatus>,
@@ -66,7 +66,6 @@ pub struct RequestQuery {
     pub offset: Option<usize>,
 }
 
-/// Health check response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
@@ -78,7 +77,181 @@ pub struct HealthResponse {
     pub failed_requests: u64,
 }
 
-// ===== New endpoint shared types =====
+// ===== Shared spec types =====
+
+/// Token descriptor used in both capabilities and fee data responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenDetails {
+    pub address: String,
+    pub decimals: u8,
+}
+
+/// Resubmission record (internal, returned inside legacy getStatus).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resubmission {
+    pub status: u16,
+    #[serde(rename = "transactionHash")]
+    pub transaction_hash: String,
+    #[serde(rename = "chainId")]
+    pub chain_id: String,
+}
+
+// ===== relayer_sendTransaction / relayer_sendTransactionMultichain =====
+
+/// Payment object per the spec: type is "token" (covers native and ERC20 by address)
+/// or "sponsored" for gas-sponsored transactions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Payment {
+    #[serde(rename = "type")]
+    pub payment_type: String,
+    /// Token address (zero address for native ETH). Required when type == "token".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// Arbitrary relayer data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
+
+/// EIP-7702 authorization entry in JSON format (per spec).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorizationItem {
+    pub address: String,
+    #[serde(rename = "chainId")]
+    pub chain_id: u64,
+    pub nonce: u64,
+    pub r: String,
+    pub s: String,
+    #[serde(rename = "yParity")]
+    pub y_parity: u8,
+}
+
+/// Params for relayer_sendTransaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendTransactionParams {
+    #[serde(rename = "chainId")]
+    pub chain_id: String,
+    pub payment: Payment,
+    /// Target wallet address (smart account) to execute the transaction on.
+    pub to: String,
+    /// Encoded executeWithRelayer calldata.
+    pub data: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<serde_json::Value>,
+    #[serde(rename = "authorizationList", skip_serializing_if = "Option::is_none")]
+    pub authorization_list: Option<Vec<AuthorizationItem>>,
+    /// Optional client-provided task ID (32-byte hex string, 0x-prefixed).
+    #[serde(rename = "taskId", skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+}
+
+// ===== relayer_getStatus =====
+
+/// Params for relayer_getStatus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetStatusParams {
+    pub id: String,
+    pub logs: bool,
+}
+
+/// Log entry returned in a confirmed receipt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Log {
+    pub address: String,
+    pub topics: Vec<String>,
+    pub data: String,
+}
+
+/// Receipt returned for a confirmed (200) status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpecReceipt {
+    #[serde(rename = "blockHash")]
+    pub block_hash: String,
+    #[serde(rename = "blockNumber")]
+    pub block_number: String,
+    #[serde(rename = "gasUsed")]
+    pub gas_used: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logs: Option<Vec<Log>>,
+    #[serde(rename = "transactionHash")]
+    pub transaction_hash: String,
+}
+
+/// Spec-defined status codes.
+///
+/// - 100: Pending (received, not yet submitted on-chain)
+/// - 110: Submitted (on-chain, awaiting confirmation)
+/// - 200: Confirmed (successfully included)
+/// - 400: Rejected (off-chain failure)
+/// - 500: Reverted (on-chain failure)
+///
+/// Flat struct with optional fields; which fields are present depends on the status code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpecStatusResponse {
+    #[serde(rename = "chainId")]
+    pub chain_id: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: u64,
+    pub status: u16,
+    /// On-chain tx hash; present for status 110 (submitted).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    /// Full receipt; present for status 200 (confirmed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<SpecReceipt>,
+    /// Human-readable error description; present for status 400 and 500.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Revert data (hex string); present for status 500. May also be present for 400.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
+
+// ===== relayer_getCapabilities =====
+
+/// Per-chain capability info returned by relayer_getCapabilities.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainCapabilities {
+    #[serde(rename = "feeCollector")]
+    pub fee_collector: String,
+    pub tokens: Vec<TokenDetails>,
+}
+
+/// Response is a map of chain ID -> capabilities.
+pub type GetCapabilitiesResponse = HashMap<String, ChainCapabilities>;
+
+// ===== relayer_getFeeData =====
+
+/// Params for relayer_getFeeData.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeeDataParams {
+    #[serde(rename = "chainId")]
+    pub chain_id: String,
+    pub token: String,
+}
+
+/// Response for relayer_getFeeData.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeeDataResponse {
+    #[serde(rename = "chainId")]
+    pub chain_id: String,
+    pub token: TokenDetails,
+    /// Tokens per 1 unit of native currency (e.g., USDC/ETH = 2000.5).
+    /// For native token payments this is always 1.0.
+    pub rate: f64,
+    /// Minimum fee denominated in token units (human-readable), if applicable.
+    #[serde(rename = "minFee", skip_serializing_if = "Option::is_none")]
+    pub min_fee: Option<String>,
+    /// Unix timestamp when this quote expires.
+    pub expiry: u64,
+    /// Effective gas price in wei (hex).
+    #[serde(rename = "gasPrice")]
+    pub gas_price: String,
+    /// Opaque context for the relayer (e.g., signed quote).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<serde_json::Value>,
+}
+
+// ===== relayer_getQuote (non-spec, retained for backward compat) =====
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenInfo {
@@ -93,202 +266,6 @@ pub struct RelayerCall {
     pub to: String,
     pub data: String,
 }
-
-// ===== relayer_sendTransaction =====
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PaymentCapability {
-    #[serde(rename = "type")]
-    pub payment_type: String,
-    pub token: String,
-    pub data: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SendTransactionCapabilities {
-    pub payment: PaymentCapability,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SendTransactionRequest {
-    pub to: String,
-    pub data: String,
-    pub capabilities: SendTransactionCapabilities,
-    #[serde(rename = "chainId")]
-    pub chain_id: String,
-    #[serde(rename = "authorizationList")]
-    pub authorization_list: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SendTransactionResult {
-    #[serde(rename = "chainId")]
-    pub chain_id: String,
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SendTransactionResponse {
-    pub result: Vec<SendTransactionResult>,
-}
-
-// ===== relayer_sendTransactionMultichain =====
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MultichainTransaction {
-    pub to: String,
-    pub data: String,
-    #[serde(rename = "chainId")]
-    pub chain_id: String,
-    #[serde(rename = "authorizationList")]
-    pub authorization_list: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SendTransactionMultichainRequest {
-    pub transactions: Vec<MultichainTransaction>,
-    pub capabilities: SendTransactionCapabilities,
-    #[serde(rename = "paymentChainId")]
-    pub payment_chain_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MultichainTransactionResult {
-    #[serde(rename = "chainId")]
-    pub chain_id: String,
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SendTransactionMultichainResponse {
-    pub result: Vec<MultichainTransactionResult>,
-}
-
-// ===== relayer_getStatus =====
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetStatusRequest {
-    pub ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Log {
-    pub address: String,
-    pub topics: Vec<String>,
-    pub data: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Receipt {
-    pub logs: Vec<Log>,
-    pub status: String,
-    #[serde(rename = "blockHash")]
-    pub block_hash: String,
-    #[serde(rename = "blockNumber")]
-    pub block_number: String,
-    #[serde(rename = "gasUsed")]
-    pub gas_used: String,
-    #[serde(rename = "transactionHash")]
-    pub transaction_hash: String,
-    #[serde(rename = "chainId")]
-    pub chain_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Resubmission {
-    pub status: u16,
-    #[serde(rename = "transactionHash")]
-    pub transaction_hash: String,
-    #[serde(rename = "chainId")]
-    pub chain_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OffchainFailure {
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OnchainFailure {
-    #[serde(rename = "transactionHash")]
-    pub transaction_hash: String,
-    #[serde(rename = "chainId")]
-    pub chain_id: String,
-    pub message: String,
-    pub data: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StatusResult {
-    pub version: String,
-    pub id: String,
-    pub status: u16,
-    pub receipts: Vec<Receipt>,
-    pub resubmissions: Vec<Resubmission>,
-    #[serde(rename = "offchainFailure")]
-    pub offchain_failure: Vec<OffchainFailure>,
-    #[serde(rename = "onchainFailure")]
-    pub onchain_failure: Vec<OnchainFailure>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetStatusResponse {
-    pub result: Vec<StatusResult>,
-}
-
-// ===== relayer_getExchangeRate =====
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExchangeRateRequest {
-    pub token: String,
-    #[serde(rename = "chainId")]
-    pub chain_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExchangeRateQuote {
-    pub rate: f64, // for 1 unit of gas in token's decimals
-    pub token: TokenInfo,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExchangeRateSuccess {
-    pub quote: ExchangeRateQuote,
-    #[serde(rename = "gasPrice")]
-    pub gas_price: String,
-    #[serde(rename = "maxFeePerGas")]
-    pub max_fee_per_gas: Option<String>,
-    #[serde(rename = "maxPriorityFeePerGas")]
-    pub max_priority_fee_per_gas: Option<String>,
-    #[serde(rename = "feeCollector")]
-    pub fee_collector: String,
-    pub expiry: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExchangeRateErrorBody {
-    pub id: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExchangeRateError {
-    pub error: ExchangeRateErrorBody,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ExchangeRateResultItem {
-    Success(ExchangeRateSuccess),
-    Error(ExchangeRateError),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExchangeRateResponse {
-    pub result: Vec<ExchangeRateResultItem>,
-}
-
-// ===== relayer_getQuote =====
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuoteRequestCapabilities {
@@ -325,59 +302,3 @@ pub struct QuoteResponse {
     #[serde(rename = "revertReason")]
     pub revert_reason: String,
 }
-
-// ===== relayer_getCapabilities =====
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum PaymentType {
-    Native,
-    #[serde(rename = "erc20")]
-    Erc20,
-    Sponsored,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NativePayment {
-    #[serde(rename = "type")]
-    pub payment_type: PaymentType,
-    pub token: String, // "0x0000000000000000000000000000000000000000"
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Erc20Payment {
-    #[serde(rename = "type")]
-    pub payment_type: PaymentType,
-    pub token: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SponsoredPayment {
-    #[serde(rename = "type")]
-    pub payment_type: PaymentType,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Payment {
-    Native(NativePayment),
-    Erc20(Erc20Payment),
-    Sponsored(SponsoredPayment),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Capabilities {
-    pub payment: Vec<Payment>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetCapabilitiesResponse {
-    pub capabilities: Capabilities,
-}
-
-pub type FeeDataRequest = ExchangeRateRequest;
-pub type FeeDataQuote = ExchangeRateQuote;
-pub type FeeDataSuccess = ExchangeRateSuccess;
-pub type FeeDataError = ExchangeRateError;
-pub type FeeDataResultItem = ExchangeRateResultItem;
-pub type FeeDataResponse = ExchangeRateResponse;
