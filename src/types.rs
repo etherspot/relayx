@@ -246,9 +246,22 @@ pub struct FeeDataResponse {
     pub min_fee: Option<String>,
     /// Unix timestamp when this quote expires.
     pub expiry: u64,
-    /// Effective gas price in wei (hex).
+    /// Legacy gas price in wei (hex). Clients SHOULD prefer maxFeePerGas when present.
     #[serde(rename = "gasPrice")]
     pub gas_price: String,
+    /// EIP-1559 max fee per gas in wei (hex). Present when the chain supports EIP-1559.
+    #[serde(rename = "maxFeePerGas", skip_serializing_if = "Option::is_none")]
+    pub max_fee_per_gas: Option<String>,
+    /// EIP-1559 max priority fee per gas in wei (hex). Present alongside maxFeePerGas.
+    #[serde(
+        rename = "maxPriorityFeePerGas",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_priority_fee_per_gas: Option<String>,
+    /// Fee collector address clients should transfer payment tokens to.
+    /// Duplicates relayer_getCapabilities for single-call convenience.
+    #[serde(rename = "feeCollector", skip_serializing_if = "Option::is_none")]
+    pub fee_collector: Option<String>,
     /// Opaque context for the relayer (e.g., signed quote).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<serde_json::Value>,
