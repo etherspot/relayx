@@ -67,6 +67,10 @@ pub struct Config {
     /// Sentry DSN for error tracking (optional)
     #[arg(long = "sentry-dsn", env = "SENTRY_DSN")]
     pub sentry_dsn: Option<String>,
+
+    /// Disable multichain transaction support (relayer_sendTransactionMultichain returns 4212)
+    #[arg(long = "disable-multichain", env = "RELAYX_DISABLE_MULTICHAIN")]
+    pub disable_multichain: bool,
 }
 
 impl Config {
@@ -136,6 +140,22 @@ impl Config {
         root.get("feeCollector")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
+    }
+
+    /// Returns the fee collector address for a specific chain.
+    /// Checks `{ "feeCollectors": { chainId: "0x..." } }` first, then falls back to the global
+    /// `feeCollector` value.
+    pub fn fee_collector_for_chain(&self, chain_id: &str) -> Option<String> {
+        if let Some(root) = self.get_json_config() {
+            if let Some(addr) = root
+                .get("feeCollectors")
+                .and_then(|m| m.get(chain_id))
+                .and_then(|v| v.as_str())
+            {
+                return Some(addr.to_string());
+            }
+        }
+        self.fee_collector()
     }
 
     /// Returns Chainlink native token/USD aggregator address for a chain
@@ -303,6 +323,18 @@ impl Config {
         }
         self.get_json_config()
             .and_then(|v| v.get("disableSimulation").and_then(|s| s.as_bool()))
+            .unwrap_or(false)
+    }
+
+    /// Returns true when multichain transactions are administratively disabled.
+    /// Operators can set `--disable-multichain`, `RELAYX_DISABLE_MULTICHAIN=true`, or
+    /// `{ "disableMultichain": true }` in the JSON config.
+    pub fn is_multichain_disabled(&self) -> bool {
+        if self.disable_multichain {
+            return true;
+        }
+        self.get_json_config()
+            .and_then(|v| v.get("disableMultichain").and_then(|s| s.as_bool()))
             .unwrap_or(false)
     }
 

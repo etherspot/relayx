@@ -23,10 +23,10 @@ use crate::{
     config::Config,
     storage::Storage,
     types::{
-        AuthorizationItem, ChainCapabilities, FeeDataParams, FeeDataResponse, GetCapabilitiesResponse,
-        GetStatusParams, HealthResponse, Log, QuoteInner, QuoteRequest, QuoteResponse,
-        RelayerCall, RelayerRequest, RequestStatus, Resubmission, SendTransactionParams,
-        SpecReceipt, SpecStatusResponse, TokenDetails, TokenInfo,
+        AuthorizationItem, ChainCapabilities, FeeDataParams, FeeDataResponse,
+        GetCapabilitiesResponse, GetStatusParams, HealthResponse, Log, QuoteInner, QuoteRequest,
+        QuoteResponse, RelayerCall, RelayerRequest, RequestStatus, Resubmission,
+        SendTransactionParams, SpecReceipt, SpecStatusResponse, TokenDetails, TokenInfo,
     },
 };
 
@@ -98,6 +98,52 @@ fn invalid_task_id_error() -> jsonrpc_core::Error {
 fn duplicate_task_id_error() -> jsonrpc_core::Error {
     let mut err = jsonrpc_core::Error::new(jsonrpc_core::ErrorCode::ServerError(4214));
     err.message = "Duplicate Task ID".to_string();
+    err
+}
+
+/// 4200: Raised by fee-verification middleware when the on-chain transfer amount is below the
+/// minimum required fee (spec §Error Codes). Not wired to the core relay path — callers that
+/// inspect ERC-20 transfer events before relaying should return this.
+#[allow(dead_code)]
+pub(crate) fn insufficient_payment_error() -> jsonrpc_core::Error {
+    let mut err = jsonrpc_core::Error::new(jsonrpc_core::ErrorCode::ServerError(4200));
+    err.message = "Insufficient Payment".to_string();
+    err
+}
+
+/// 4201: Raised when signature recovery fails or the recovered signer does not match the account.
+/// Returned by validator middleware that performs off-chain signature verification before relaying.
+#[allow(dead_code)]
+pub(crate) fn invalid_signature_error() -> jsonrpc_core::Error {
+    let mut err = jsonrpc_core::Error::new(jsonrpc_core::ErrorCode::ServerError(4201));
+    err.message = "Invalid Signature".to_string();
+    err
+}
+
+/// 4203: Raised by rate-limiting middleware when a caller exceeds the per-address or per-API-key
+/// request quota. Operators integrating a rate-limiter layer should return this error.
+#[allow(dead_code)]
+pub(crate) fn rate_limit_exceeded_error() -> jsonrpc_core::Error {
+    let mut err = jsonrpc_core::Error::new(jsonrpc_core::ErrorCode::ServerError(4203));
+    err.message = "Rate Limit Exceeded".to_string();
+    err
+}
+
+fn quote_expired_error() -> jsonrpc_core::Error {
+    let mut err = jsonrpc_core::Error::new(jsonrpc_core::ErrorCode::ServerError(4204));
+    err.message = "Quote Expired".to_string();
+    err
+}
+
+fn transaction_too_large_error() -> jsonrpc_core::Error {
+    let mut err = jsonrpc_core::Error::new(jsonrpc_core::ErrorCode::ServerError(4207));
+    err.message = "Transaction Too Large".to_string();
+    err
+}
+
+fn multichain_not_supported_error() -> jsonrpc_core::Error {
+    let mut err = jsonrpc_core::Error::new(jsonrpc_core::ErrorCode::ServerError(4212));
+    err.message = "Multichain Not Supported".to_string();
     err
 }
 
@@ -228,9 +274,28 @@ fn get_relayer_private_key(cfg: &Config) -> Result<String, String> {
         .ok_or_else(|| "RELAYX_PRIVATE_KEY configuration missing".to_string())
 }
 
+struct GasFees {
+    /// Legacy / base gas price (hex wei). Always present.
+    gas_price: String,
+    /// EIP-1559 max fee per gas (hex wei). None on pre-EIP-1559 chains.
+    max_fee_per_gas: Option<String>,
+    /// EIP-1559 max priority fee per gas (hex wei). None on pre-EIP-1559 chains.
+    max_priority_fee_per_gas: Option<String>,
+}
+
 async fn fetch_gas_price(chain_id: u64, cfg: &Config) -> Result<String, String> {
+    fetch_gas_fees(chain_id, cfg).await.map(|f| f.gas_price)
+}
+
+/// Fetch both legacy and EIP-1559 fee data in a single provider call batch.
+/// Falls back to stub values in stub mode or on network errors.
+async fn fetch_gas_fees(chain_id: u64, cfg: &Config) -> Result<GasFees, String> {
     if stub_mode_enabled() {
-        return Ok("0x4a817c800".to_string());
+        return Ok(GasFees {
+            gas_price: "0x4a817c800".to_string(),
+            max_fee_per_gas: Some("0x77359400".to_string()), // 2 gwei
+            max_priority_fee_per_gas: Some("0x3b9aca00".to_string()), // 1 gwei
+        });
     }
 
     let rpc_url = cfg
@@ -240,13 +305,42 @@ async fn fetch_gas_price(chain_id: u64, cfg: &Config) -> Result<String, String> 
     let rpc_endpoint = Url::parse(&rpc_url).map_err(|e| format!("Invalid RPC URL: {}", e))?;
     let provider = ProviderBuilder::new().on_hyper_http(rpc_endpoint);
 
-    match provider.get_gas_price().await {
-        Ok(gas_price) => Ok(format!("0x{:x}", gas_price)),
+    let gas_price = match provider.get_gas_price().await {
+        Ok(p) => format!("0x{:x}", p),
         Err(e) => {
             tracing::warn!("Failed to fetch gas price for chain {}: {}", chain_id, e);
-            Ok("0x4a817c800".to_string())
+            "0x4a817c800".to_string()
         }
-    }
+    };
+
+    let (max_fee, max_priority) = match provider.get_fee_history(1, Default::default(), &[]).await {
+        Ok(history) if !history.base_fee_per_gas.is_empty() => {
+            let base = history.base_fee_per_gas[0];
+            // Priority fee = 1 gwei default; max_fee = 2× base + priority (EIP-1559 convention).
+            let priority: u128 = 1_000_000_000;
+            let max = base.saturating_mul(2) + priority;
+            (
+                Some(format!("0x{:x}", max)),
+                Some(format!("0x{:x}", priority)),
+            )
+        }
+        _ => (None, None),
+    };
+
+    Ok(GasFees {
+        gas_price,
+        max_fee_per_gas: max_fee,
+        max_priority_fee_per_gas: max_priority,
+    })
+}
+
+/// Convert a 0x-prefixed hex string to its decimal string representation.
+/// Returns the input unchanged if it cannot be parsed, so callers always get a valid string.
+fn hex_to_decimal(hex: &str) -> String {
+    let s = hex.strip_prefix("0x").unwrap_or(hex);
+    u128::from_str_radix(s, 16)
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| hex.to_string())
 }
 
 fn bump_gas_price_hex(gas_price_hex: &str, percent: u64) -> String {
@@ -328,7 +422,11 @@ async fn send_relay_transaction(
     match provider.send_transaction(tx).await {
         Ok(pending_tx) => {
             let tx_hash_hex = format!("0x{:x}", pending_tx.tx_hash());
-            tracing::info!("Transaction sent - Hash: {}, Chain: {}", tx_hash_hex, chain_id);
+            tracing::info!(
+                "Transaction sent - Hash: {}, Chain: {}",
+                tx_hash_hex,
+                chain_id
+            );
             Ok(tx_hash_hex)
         }
         Err(e) => {
@@ -433,11 +531,36 @@ async fn process_single_transaction(
         return Err(invalid_params_error());
     }
 
-    let chain_id: u64 = params.chain_id.parse().map_err(|_| invalid_params_error())?;
+    let chain_id: u64 = params
+        .chain_id
+        .parse()
+        .map_err(|_| invalid_params_error())?;
 
     if !cfg.is_chain_supported(chain_id) {
         tracing::warn!("Unsupported chain: {}", chain_id);
         return Err(unsupported_chain_error());
+    }
+
+    // 4207: calldata larger than 128 KB is rejected to prevent relay abuse.
+    const MAX_CALLDATA_BYTES: usize = 128 * 1024;
+    let raw_data = params.data.strip_prefix("0x").unwrap_or(&params.data);
+    if raw_data.len() / 2 > MAX_CALLDATA_BYTES {
+        tracing::warn!("Calldata too large: {} bytes", raw_data.len() / 2);
+        return Err(transaction_too_large_error());
+    }
+
+    // 4204: if the caller embedded a quote expiry in context, enforce it.
+    if let Some(expiry) = params
+        .context
+        .as_ref()
+        .and_then(|ctx| ctx.get("expiry"))
+        .and_then(|v| v.as_u64())
+    {
+        let now = chrono::Utc::now().timestamp() as u64;
+        if now > expiry {
+            tracing::warn!("Quote expired at {}, now {}", expiry, now);
+            return Err(quote_expired_error());
+        }
     }
 
     let wallet_address: Address = params.to.parse().map_err(|_| invalid_params_error())?;
@@ -479,7 +602,9 @@ async fn process_single_transaction(
         _ => return Err(unsupported_capability_error()),
     }
 
-    let gas_price = fetch_gas_price(chain_id, cfg).await.unwrap_or_else(|_| "0x4a817c800".to_string());
+    let gas_price = fetch_gas_price(chain_id, cfg)
+        .await
+        .unwrap_or_else(|_| "0x4a817c800".to_string());
 
     let sim_gas = match simulate_transaction(&params.to, &params.data, chain_id, cfg).await {
         Ok(gas) => gas,
@@ -505,7 +630,8 @@ async fn process_single_transaction(
         let zero_addr = "0x0000000000000000000000000000000000000000";
 
         if token_addr == zero_addr && !stub_mode_enabled() {
-            let gas_price_u256 = parse_hex_u256(&gas_price).ok_or_else(jsonrpc_core::Error::internal_error)?;
+            let gas_price_u256 =
+                parse_hex_u256(&gas_price).ok_or_else(jsonrpc_core::Error::internal_error)?;
             let required = gas_price_u256
                 .checked_mul(U256::from(sim_gas))
                 .ok_or_else(jsonrpc_core::Error::internal_error)?;
@@ -560,16 +686,27 @@ async fn process_single_transaction(
         callback_url,
     };
 
-    storage.create_request(relayer_request.clone()).await.map_err(|e| {
-        tracing::error!("Failed to store request: {}", e);
-        jsonrpc_core::Error::internal_error()
-    })?;
+    storage
+        .create_request(relayer_request.clone())
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to store request: {}", e);
+            jsonrpc_core::Error::internal_error()
+        })?;
 
-    tracing::info!("Transaction accepted - task_id: {}, chain: {}", task_id, chain_id);
+    tracing::info!(
+        "Transaction accepted - task_id: {}, chain: {}",
+        task_id,
+        chain_id
+    );
 
-    match send_relay_transaction(&params.to, &params.data, chain_id, sim_gas, &gas_price, cfg).await {
+    match send_relay_transaction(&params.to, &params.data, chain_id, sim_gas, &gas_price, cfg).await
+    {
         Ok(tx_hash) => {
-            if let Err(e) = storage.update_request_tx_hash(internal_id, tx_hash.clone()).await {
+            if let Err(e) = storage
+                .update_request_tx_hash(internal_id, tx_hash.clone())
+                .await
+            {
                 tracing::warn!("Failed to store tx hash: {}", e);
             }
             if let Err(e) = storage
@@ -623,7 +760,15 @@ async fn process_send_transaction_multichain(
     items: &[SendTransactionParams],
     cfg: &Config,
 ) -> Result<Vec<String>, jsonrpc_core::Error> {
-    tracing::info!("=== relayer_sendTransactionMultichain ({} items) ===", items.len());
+    tracing::info!(
+        "=== relayer_sendTransactionMultichain ({} items) ===",
+        items.len()
+    );
+
+    // 4212: operator has disabled multichain support for this instance.
+    if cfg.is_multichain_disabled() {
+        return Err(multichain_not_supported_error());
+    }
 
     if items.len() < 2 {
         return Err(jsonrpc_core::Error::invalid_params(
@@ -794,8 +939,8 @@ async fn fetch_receipt_for_status(
     match provider.get_transaction_receipt(txh).await {
         Ok(Some(r)) => Some(SpecReceipt {
             block_hash: format!("0x{:x}", r.block_hash.unwrap_or_default()),
-            block_number: format!("0x{:x}", r.block_number.unwrap_or_default()),
-            gas_used: format!("0x{:x}", r.gas_used),
+            block_number: r.block_number.unwrap_or_default().to_string(),
+            gas_used: r.gas_used.to_string(),
             logs: Some(
                 r.inner
                     .logs()
@@ -817,10 +962,22 @@ async fn process_health_check(
     storage: Storage,
     _cfg: &Config,
 ) -> Result<HealthResponse, jsonrpc_core::Error> {
-    let total_requests = storage.get_total_request_count().await.map_err(|_| jsonrpc_core::Error::internal_error())?;
-    let pending_requests = storage.get_request_count_by_status(RequestStatus::Pending).await.map_err(|_| jsonrpc_core::Error::internal_error())?;
-    let completed_requests = storage.get_request_count_by_status(RequestStatus::Completed).await.map_err(|_| jsonrpc_core::Error::internal_error())?;
-    let failed_requests = storage.get_request_count_by_status(RequestStatus::Failed).await.map_err(|_| jsonrpc_core::Error::internal_error())?;
+    let total_requests = storage
+        .get_total_request_count()
+        .await
+        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+    let pending_requests = storage
+        .get_request_count_by_status(RequestStatus::Pending)
+        .await
+        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+    let completed_requests = storage
+        .get_request_count_by_status(RequestStatus::Completed)
+        .await
+        .map_err(|_| jsonrpc_core::Error::internal_error())?;
+    let failed_requests = storage
+        .get_request_count_by_status(RequestStatus::Failed)
+        .await
+        .map_err(|_| jsonrpc_core::Error::internal_error())?;
 
     Ok(HealthResponse {
         status: "healthy".to_string(),
@@ -913,12 +1070,15 @@ async fn build_fee_data_response(
         return Err(unsupported_chain_error());
     }
 
-    let gas_price = if stub_mode_enabled() {
-        "0x4a817c800".to_string()
-    } else {
-        fetch_gas_price(chain_id, cfg).await.unwrap_or_else(|_| "0x4a817c800".to_string())
-    };
+    let fees = fetch_gas_fees(chain_id, cfg)
+        .await
+        .unwrap_or_else(|_| GasFees {
+            gas_price: "0x4a817c800".to_string(),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+        });
 
+    let fee_collector = cfg.fee_collector_for_chain(&chain_id.to_string());
     let zero_addr = "0x0000000000000000000000000000000000000000";
 
     if req.token.to_lowercase() == zero_addr {
@@ -932,7 +1092,10 @@ async fn build_fee_data_response(
             rate: 1.0,
             min_fee: None,
             expiry,
-            gas_price,
+            gas_price: hex_to_decimal(&fees.gas_price),
+            max_fee_per_gas: fees.max_fee_per_gas.clone(),
+            max_priority_fee_per_gas: fees.max_priority_fee_per_gas.clone(),
+            fee_collector: fee_collector.clone(),
             context: None,
         });
     }
@@ -948,7 +1111,10 @@ async fn build_fee_data_response(
             rate: 2000.0,
             min_fee: None,
             expiry,
-            gas_price,
+            gas_price: hex_to_decimal(&fees.gas_price),
+            max_fee_per_gas: fees.max_fee_per_gas.clone(),
+            max_priority_fee_per_gas: fees.max_priority_fee_per_gas.clone(),
+            fee_collector: fee_collector.clone(),
             context: None,
         });
     }
@@ -980,7 +1146,10 @@ async fn build_fee_data_response(
 
     async fn read_decimals(rpc_url: &str, contract: &str) -> Option<u8> {
         let sel: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
-        eth_call_bytes(rpc_url, contract, &sel).await?.last().cloned()
+        eth_call_bytes(rpc_url, contract, &sel)
+            .await?
+            .last()
+            .cloned()
     }
 
     async fn read_latest_answer(rpc_url: &str, aggregator: &str) -> Option<i128> {
@@ -994,7 +1163,9 @@ async fn build_fee_data_response(
         Some(i128::from_be_bytes(buf))
     }
 
-    let native_dec = read_decimals(&rpc_url, &native_feed_addr).await.unwrap_or(8);
+    let native_dec = read_decimals(&rpc_url, &native_feed_addr)
+        .await
+        .unwrap_or(8);
     let token_dec = read_decimals(&rpc_url, &token_feed_addr).await.unwrap_or(8);
     let native_px = read_latest_answer(&rpc_url, &native_feed_addr).await;
     let token_px = read_latest_answer(&rpc_url, &token_feed_addr).await;
@@ -1014,7 +1185,9 @@ async fn build_fee_data_response(
         let sel: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
         eth_call_bytes(rpc_url, token, &sel).await?.last().cloned()
     }
-    let token_decimals = read_erc20_decimals(&rpc_url, &req.token).await.unwrap_or(18);
+    let token_decimals = read_erc20_decimals(&rpc_url, &req.token)
+        .await
+        .unwrap_or(18);
 
     Ok(FeeDataResponse {
         chain_id: req.chain_id.clone(),
@@ -1025,7 +1198,10 @@ async fn build_fee_data_response(
         rate,
         min_fee: None,
         expiry,
-        gas_price,
+        gas_price: hex_to_decimal(&fees.gas_price),
+        max_fee_per_gas: fees.max_fee_per_gas,
+        max_priority_fee_per_gas: fees.max_priority_fee_per_gas,
+        fee_collector,
         context: None,
     })
 }
@@ -1079,43 +1255,49 @@ impl RpcServer {
         {
             let storage = self.storage.clone();
             let cfg = self.config.clone();
-            io.add_method("relayer_sendTransactionMultichain", move |params: Params| {
-                let storage = storage.clone();
-                let cfg = cfg.clone();
-                async move {
-                    tracing::info!("[relayer_sendTransactionMultichain] received");
-                    let items: Vec<SendTransactionParams> = params.parse().map_err(|e| {
-                        tracing::warn!("[relayer_sendTransactionMultichain] parse error: {}", e);
-                        let err = invalid_params_error();
-                        capture_sentry_error("relayer_sendTransactionMultichain", &err);
-                        err
-                    })?;
+            io.add_method(
+                "relayer_sendTransactionMultichain",
+                move |params: Params| {
+                    let storage = storage.clone();
+                    let cfg = cfg.clone();
+                    async move {
+                        tracing::info!("[relayer_sendTransactionMultichain] received");
+                        let items: Vec<SendTransactionParams> = params.parse().map_err(|e| {
+                            tracing::warn!(
+                                "[relayer_sendTransactionMultichain] parse error: {}",
+                                e
+                            );
+                            let err = invalid_params_error();
+                            capture_sentry_error("relayer_sendTransactionMultichain", &err);
+                            err
+                        })?;
 
-                    match process_send_transaction_multichain(storage, &items, &cfg).await {
-                        Ok(task_ids) => {
-                            tracing::info!(
-                                "[relayer_sendTransactionMultichain] {} task(s) created",
-                                task_ids.len()
-                            );
-                            serde_json::to_value(task_ids).map_err(|_| {
-                                capture_sentry_error(
-                                    "relayer_sendTransactionMultichain",
-                                    &jsonrpc_core::Error::internal_error(),
+                        match process_send_transaction_multichain(storage, &items, &cfg).await {
+                            Ok(task_ids) => {
+                                tracing::info!(
+                                    "[relayer_sendTransactionMultichain] {} task(s) created",
+                                    task_ids.len()
                                 );
-                                jsonrpc_core::Error::internal_error()
-                            })
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "[relayer_sendTransactionMultichain] error: {:?}",
-                                e.code
-                            );
-                            capture_sentry_error("relayer_sendTransactionMultichain", &e);
-                            Err(e)
+                                serde_json::to_value(task_ids).map_err(|_| {
+                                    capture_sentry_error(
+                                        "relayer_sendTransactionMultichain",
+                                        &jsonrpc_core::Error::internal_error(),
+                                    );
+                                    jsonrpc_core::Error::internal_error()
+                                })
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "[relayer_sendTransactionMultichain] error: {:?}",
+                                    e.code
+                                );
+                                capture_sentry_error("relayer_sendTransactionMultichain", &e);
+                                Err(e)
+                            }
                         }
                     }
-                }
-            });
+                },
+            );
         }
 
         // relayer_getStatus
@@ -1135,11 +1317,8 @@ impl RpcServer {
                     })?;
 
                     match process_get_status(storage, &request, &cfg).await {
-                        Ok(response) => {
-                            serde_json::to_value(response).map_err(|_| {
-                                jsonrpc_core::Error::internal_error()
-                            })
-                        }
+                        Ok(response) => serde_json::to_value(response)
+                            .map_err(|_| jsonrpc_core::Error::internal_error()),
                         Err(e) => {
                             capture_sentry_error("relayer_getStatus", &e);
                             Err(e)
@@ -1165,11 +1344,8 @@ impl RpcServer {
                     };
 
                     match process_get_capabilities(storage, &chains, &cfg).await {
-                        Ok(caps) => {
-                            serde_json::to_value(caps).map_err(|_| {
-                                jsonrpc_core::Error::internal_error()
-                            })
-                        }
+                        Ok(caps) => serde_json::to_value(caps)
+                            .map_err(|_| jsonrpc_core::Error::internal_error()),
                         Err(e) => {
                             capture_sentry_error("relayer_getCapabilities", &e);
                             Err(e)
@@ -1192,11 +1368,8 @@ impl RpcServer {
                     })?;
 
                     match build_fee_data_response(&cfg, &input).await {
-                        Ok(resp) => {
-                            serde_json::to_value(resp).map_err(|_| {
-                                jsonrpc_core::Error::internal_error()
-                            })
-                        }
+                        Ok(resp) => serde_json::to_value(resp)
+                            .map_err(|_| jsonrpc_core::Error::internal_error()),
                         Err(e) => {
                             capture_sentry_error("relayer_getFeeData", &e);
                             Err(e)
@@ -1213,9 +1386,11 @@ impl RpcServer {
                 let cfg = cfg.clone();
                 async move {
                     tracing::info!("[relayer_getExchangeRate] received (alias for getFeeData)");
-                    let input: FeeDataParams = params.parse().map_err(|_| invalid_params_error())?;
+                    let input: FeeDataParams =
+                        params.parse().map_err(|_| invalid_params_error())?;
                     match build_fee_data_response(&cfg, &input).await {
-                        Ok(resp) => serde_json::to_value(resp).map_err(|_| jsonrpc_core::Error::internal_error()),
+                        Ok(resp) => serde_json::to_value(resp)
+                            .map_err(|_| jsonrpc_core::Error::internal_error()),
                         Err(e) => Err(e),
                     }
                 }
@@ -1231,18 +1406,19 @@ impl RpcServer {
                     tracing::info!("[relayer_getQuote] received");
                     let input: QuoteRequest = params.parse().map_err(|_| invalid_params_error())?;
 
-                    let chain_id: u64 = input.chain_id.as_ref().and_then(|s| s.parse().ok()).unwrap_or(1);
+                    let chain_id: u64 = input
+                        .chain_id
+                        .as_ref()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(1);
                     let gas_limit = simulate_transaction(&input.to, &input.data, chain_id, &cfg)
                         .await
                         .unwrap_or(21000);
                     let gas_price_hex = fetch_gas_price(chain_id, &cfg)
                         .await
                         .unwrap_or_else(|_| "0x4a817c800".to_string());
-                    let wei = u128::from_str_radix(
-                        gas_price_hex.trim_start_matches("0x"),
-                        16,
-                    )
-                    .unwrap_or(20_000_000_000);
+                    let wei = u128::from_str_radix(gas_price_hex.trim_start_matches("0x"), 16)
+                        .unwrap_or(20_000_000_000);
                     let fee_wei = (wei as u128).saturating_mul(gas_limit as u128);
                     let fee = u64::try_from(fee_wei.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
 
@@ -1261,8 +1437,9 @@ impl RpcServer {
                             to: input.to.clone(),
                             data: input.data.clone(),
                         }],
-                        fee_collector: std::env::var("RELAYX_FEE_COLLECTOR")
-                            .unwrap_or_else(|_| "0x55f3a93f544e01ce4378d25e927d7c493b863bd6".to_string()),
+                        fee_collector: std::env::var("RELAYX_FEE_COLLECTOR").unwrap_or_else(|_| {
+                            "0x55f3a93f544e01ce4378d25e927d7c493b863bd6".to_string()
+                        }),
                         revert_reason: "".to_string(),
                     };
 
@@ -1280,7 +1457,8 @@ impl RpcServer {
                 let cfg = cfg.clone();
                 async move {
                     match process_health_check(storage, &cfg).await {
-                        Ok(health) => serde_json::to_value(health).map_err(|_| jsonrpc_core::Error::internal_error()),
+                        Ok(health) => serde_json::to_value(health)
+                            .map_err(|_| jsonrpc_core::Error::internal_error()),
                         Err(e) => Err(e),
                     }
                 }
@@ -1312,7 +1490,10 @@ impl RpcServer {
                     sleep(Duration::from_secs(10)).await;
                     if let Ok(requests) = storage_bg.get_requests(Some(1000)).await {
                         for req in requests {
-                            if matches!(req.status, RequestStatus::Pending | RequestStatus::Processing) {
+                            if matches!(
+                                req.status,
+                                RequestStatus::Pending | RequestStatus::Processing
+                            ) {
                                 if let Some(tx_hash) = req.transaction_hash.clone() {
                                     if let Some(receipt) = fetch_and_store_receipt(
                                         &storage_bg,
@@ -1326,7 +1507,9 @@ impl RpcServer {
                                         let _ = receipt;
                                     } else {
                                         // Still pending: gas-bump resubmission
-                                        if let Ok(price_hex) = fetch_gas_price(req.chain_id, &cfg_bg).await {
+                                        if let Ok(price_hex) =
+                                            fetch_gas_price(req.chain_id, &cfg_bg).await
+                                        {
                                             let bumped = bump_gas_price_hex(&price_hex, 20);
                                             if let Some(data) = req.data.clone() {
                                                 match send_relay_transaction(
@@ -1340,29 +1523,47 @@ impl RpcServer {
                                                 .await
                                                 {
                                                     Ok(new_hash) => {
-                                                        let _ = storage_bg.update_request_tx_hash(req.id, new_hash.clone()).await;
+                                                        let _ = storage_bg
+                                                            .update_request_tx_hash(
+                                                                req.id,
+                                                                new_hash.clone(),
+                                                            )
+                                                            .await;
                                                         let _ = storage_bg
                                                             .add_resubmission(
                                                                 req.id,
                                                                 &Resubmission {
                                                                     status: 110,
                                                                     transaction_hash: new_hash,
-                                                                    chain_id: req.chain_id.to_string(),
+                                                                    chain_id: req
+                                                                        .chain_id
+                                                                        .to_string(),
                                                                 },
                                                             )
                                                             .await;
                                                         let _ = storage_bg
-                                                            .update_request_status(req.id, RequestStatus::Processing, None)
+                                                            .update_request_status(
+                                                                req.id,
+                                                                RequestStatus::Processing,
+                                                                None,
+                                                            )
                                                             .await;
                                                     }
                                                     Err(e) => {
                                                         let _ = storage_bg
-                                                            .update_request_status(req.id, RequestStatus::Failed, Some(e.clone()))
+                                                            .update_request_status(
+                                                                req.id,
+                                                                RequestStatus::Failed,
+                                                                Some(e.clone()),
+                                                            )
                                                             .await;
                                                         if req.callback_url.is_some() {
                                                             let status_resp = SpecStatusResponse {
                                                                 chain_id: req.chain_id.to_string(),
-                                                                created_at: req.created_at.timestamp() as u64,
+                                                                created_at: req
+                                                                    .created_at
+                                                                    .timestamp()
+                                                                    as u64,
                                                                 status: 400,
                                                                 hash: None,
                                                                 receipt: None,
@@ -1412,7 +1613,12 @@ async fn fire_callback(req: &RelayerRequest, status: &SpecStatusResponse) {
         status,
     };
 
-    match reqwest::Client::new().post(&url).json(&payload).send().await {
+    match reqwest::Client::new()
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await
+    {
         Ok(resp) => {
             tracing::info!(
                 "Callback delivered for task_id {} → {} (HTTP {})",
@@ -1422,7 +1628,12 @@ async fn fire_callback(req: &RelayerRequest, status: &SpecStatusResponse) {
             );
         }
         Err(e) => {
-            tracing::warn!("Callback failed for task_id {} → {}: {}", req.task_id, url, e);
+            tracing::warn!(
+                "Callback failed for task_id {} → {}: {}",
+                req.task_id,
+                url,
+                e
+            );
         }
     }
 }
@@ -1435,7 +1646,9 @@ async fn fetch_and_store_receipt(
     tx_hash: &str,
 ) -> Option<SpecReceipt> {
     if stub_mode_enabled() {
-        let _ = storage.update_request_status(req.id, RequestStatus::Completed, None).await;
+        let _ = storage
+            .update_request_status(req.id, RequestStatus::Completed, None)
+            .await;
         return None;
     }
 
@@ -1456,8 +1669,8 @@ async fn fetch_and_store_receipt(
             let status_ok = r.status();
             let receipt = SpecReceipt {
                 block_hash: format!("0x{:x}", r.block_hash.unwrap_or_default()),
-                block_number: format!("0x{:x}", r.block_number.unwrap_or_default()),
-                gas_used: format!("0x{:x}", r.gas_used),
+                block_number: r.block_number.unwrap_or_default().to_string(),
+                gas_used: r.gas_used.to_string(),
                 logs: Some(
                     r.inner
                         .logs()
@@ -1474,7 +1687,9 @@ async fn fetch_and_store_receipt(
 
             if status_ok {
                 let _ = storage.store_receipt(req.id, &receipt).await;
-                let _ = storage.update_request_status(req.id, RequestStatus::Completed, None).await;
+                let _ = storage
+                    .update_request_status(req.id, RequestStatus::Completed, None)
+                    .await;
                 let status_resp = SpecStatusResponse {
                     chain_id: req.chain_id.to_string(),
                     created_at: req.created_at.timestamp() as u64,
@@ -1534,6 +1749,7 @@ mod tests {
             relayer_private_key: None,
             disable_simulation: false,
             sentry_dsn: None,
+            disable_multichain: false,
         }
     }
 
@@ -1573,7 +1789,10 @@ mod tests {
             id: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string(),
             logs: false,
         };
-        let err = super::process_get_status(storage, &req, &cfg).await.err().unwrap();
+        let err = super::process_get_status(storage, &req, &cfg)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::ServerError(4208));
     }
 
@@ -1595,7 +1814,10 @@ mod tests {
             authorization_list: None,
             task_id: None,
         };
-        let err = super::process_send_transaction(storage, &req, &cfg).await.err().unwrap();
+        let err = super::process_send_transaction(storage, &req, &cfg)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
     }
 
@@ -1617,7 +1839,10 @@ mod tests {
             authorization_list: None,
             task_id: None,
         };
-        let err = super::process_send_transaction(storage, &req, &cfg).await.err().unwrap();
+        let err = super::process_send_transaction(storage, &req, &cfg)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::ServerError(4206));
     }
 
@@ -1639,7 +1864,10 @@ mod tests {
             authorization_list: None,
             task_id: None,
         };
-        let err = super::process_send_transaction(storage, &req, &cfg).await.err().unwrap();
+        let err = super::process_send_transaction(storage, &req, &cfg)
+            .await
+            .err()
+            .unwrap();
         // Chain "1" has no RPC configured in test_config → unsupported chain error fires first (4206).
         // Payment type validation (4209) fires only after chain support is confirmed.
         assert_eq!(err.code, jsonrpc_core::ErrorCode::ServerError(4206));
@@ -1665,10 +1893,14 @@ mod tests {
         };
 
         // Single item should fail
-        let err = super::process_send_transaction_multichain(storage.clone(), &[item.clone()], &cfg)
-            .await
-            .err()
-            .unwrap();
+        let err = super::process_send_transaction_multichain(
+            storage.clone(),
+            std::slice::from_ref(&item),
+            &cfg,
+        )
+        .await
+        .err()
+        .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
     }
 
@@ -1701,14 +1933,11 @@ mod tests {
             ..payment_tx.clone()
         };
 
-        let err = super::process_send_transaction_multichain(
-            storage,
-            &[payment_tx, second_tx],
-            &cfg,
-        )
-        .await
-        .err()
-        .unwrap();
+        let err =
+            super::process_send_transaction_multichain(storage, &[payment_tx, second_tx], &cfg)
+                .await
+                .err()
+                .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
     }
 
@@ -1731,7 +1960,10 @@ mod tests {
             chain_id: "abc".to_string(),
             token: "0x0000000000000000000000000000000000000000".to_string(),
         };
-        let err = super::build_fee_data_response(&cfg, &req).await.err().unwrap();
+        let err = super::build_fee_data_response(&cfg, &req)
+            .await
+            .err()
+            .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
     }
 

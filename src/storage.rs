@@ -97,10 +97,7 @@ impl Storage {
     }
 
     /// Resolve a task_id to a UUID, then retrieve the request.
-    pub async fn get_request_by_task_id(
-        &self,
-        task_id: &str,
-    ) -> Result<Option<RelayerRequest>> {
+    pub async fn get_request_by_task_id(&self, task_id: &str) -> Result<Option<RelayerRequest>> {
         let idx_key = format!("taskid:{}", task_id);
         match self.db.get(idx_key.as_bytes())? {
             Some(uuid_bytes) => {
