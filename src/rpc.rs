@@ -1747,6 +1747,7 @@ mod tests {
             relayer_private_key: None,
             disable_simulation: false,
             sentry_dsn: None,
+            disable_multichain: false,
         }
     }
 

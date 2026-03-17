@@ -24,6 +24,7 @@ fn create_test_config(temp_dir: &TempDir) -> Config {
         relayer_private_key: None,
         disable_simulation: false,
         sentry_dsn: None,
+        disable_multichain: false,
     }
 }
 
@@ -335,7 +336,10 @@ mod send_transaction_multichain_tests {
         let items: Vec<SendTransactionParams> = vec![];
         assert!(items.is_empty(), "empty list is invalid per spec");
 
-        let single = vec![make_payment_tx("1", "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6")];
+        let single = vec![make_payment_tx(
+            "1",
+            "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6",
+        )];
         assert_eq!(single.len(), 1, "single item is also invalid per spec");
     }
 
@@ -358,9 +362,15 @@ mod send_transaction_multichain_tests {
     #[test]
     fn test_multichain_different_chains() {
         let chains = vec!["1", "10", "137", "8453", "42161"];
-        let mut items = vec![make_payment_tx(chains[0], "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6")];
+        let mut items = vec![make_payment_tx(
+            chains[0],
+            "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6",
+        )];
         for &chain in &chains[1..] {
-            items.push(make_sponsored_tx(chain, "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6"));
+            items.push(make_sponsored_tx(
+                chain,
+                "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6",
+            ));
         }
         assert_eq!(items.len(), 5);
     }
@@ -377,7 +387,16 @@ mod storage_tests {
     fn make_request(id: Uuid) -> RelayerRequest {
         RelayerRequest {
             id,
-            task_id: format!("0x{}", hex::encode([0u8; 16].iter().chain(id.as_bytes()).copied().collect::<Vec<_>>())),
+            task_id: format!(
+                "0x{}",
+                hex::encode(
+                    [0u8; 16]
+                        .iter()
+                        .chain(id.as_bytes())
+                        .copied()
+                        .collect::<Vec<_>>()
+                )
+            ),
             from_address: "0x1234567890123456789012345678901234567890".to_string(),
             to_address: "0x0987654321098765432109876543210987654321".to_string(),
             amount: "1000000000000000000".to_string(),
@@ -421,7 +440,10 @@ mod storage_tests {
         let storage = create_test_storage(&temp_dir);
 
         let request_id = Uuid::new_v4();
-        storage.create_request(make_request(request_id)).await.unwrap();
+        storage
+            .create_request(make_request(request_id))
+            .await
+            .unwrap();
 
         storage
             .update_request_status(request_id, RequestStatus::Completed, None)
@@ -452,15 +474,24 @@ mod storage_tests {
         }
 
         assert_eq!(
-            storage.get_request_count_by_status(RequestStatus::Pending).await.unwrap(),
+            storage
+                .get_request_count_by_status(RequestStatus::Pending)
+                .await
+                .unwrap(),
             2
         );
         assert_eq!(
-            storage.get_request_count_by_status(RequestStatus::Completed).await.unwrap(),
+            storage
+                .get_request_count_by_status(RequestStatus::Completed)
+                .await
+                .unwrap(),
             2
         );
         assert_eq!(
-            storage.get_request_count_by_status(RequestStatus::Failed).await.unwrap(),
+            storage
+                .get_request_count_by_status(RequestStatus::Failed)
+                .await
+                .unwrap(),
             1
         );
     }
@@ -471,7 +502,10 @@ mod storage_tests {
         let storage = create_test_storage(&temp_dir);
 
         for _ in 0..3 {
-            storage.create_request(make_request(Uuid::new_v4())).await.unwrap();
+            storage
+                .create_request(make_request(Uuid::new_v4()))
+                .await
+                .unwrap();
         }
 
         assert_eq!(storage.get_total_request_count().await.unwrap(), 3);
@@ -483,7 +517,10 @@ mod storage_tests {
         let storage = create_test_storage(&temp_dir);
 
         for _ in 0..5 {
-            storage.create_request(make_request(Uuid::new_v4())).await.unwrap();
+            storage
+                .create_request(make_request(Uuid::new_v4()))
+                .await
+                .unwrap();
         }
 
         assert_eq!(storage.get_requests(Some(3)).await.unwrap().len(), 3);
@@ -515,7 +552,8 @@ mod storage_tests {
 
         // Check existence check
         assert!(storage.task_id_exists(task_id));
-        assert!(!storage.task_id_exists("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"));
+        assert!(!storage
+            .task_id_exists("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"));
     }
 }
 
