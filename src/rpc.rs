@@ -334,6 +334,13 @@ async fn fetch_gas_fees(chain_id: u64, cfg: &Config) -> Result<GasFees, String> 
     })
 }
 
+/// Convert a 0x-prefixed hex string to its decimal string representation.
+/// Returns the input unchanged if it cannot be parsed, so callers always get a valid string.
+fn hex_to_decimal(hex: &str) -> String {
+    let s = hex.strip_prefix("0x").unwrap_or(hex);
+    u128::from_str_radix(s, 16).map(|v| v.to_string()).unwrap_or_else(|_| hex.to_string())
+}
+
 fn bump_gas_price_hex(gas_price_hex: &str, percent: u64) -> String {
     let s = gas_price_hex.strip_prefix("0x").unwrap_or(gas_price_hex);
     if let Ok(mut v) = u128::from_str_radix(s, 16) {
@@ -930,8 +937,8 @@ async fn fetch_receipt_for_status(
     match provider.get_transaction_receipt(txh).await {
         Ok(Some(r)) => Some(SpecReceipt {
             block_hash: format!("0x{:x}", r.block_hash.unwrap_or_default()),
-            block_number: format!("0x{:x}", r.block_number.unwrap_or_default()),
-            gas_used: format!("0x{:x}", r.gas_used),
+            block_number: r.block_number.unwrap_or_default().to_string(),
+            gas_used: r.gas_used.to_string(),
             logs: Some(
                 r.inner
                     .logs()
@@ -1083,7 +1090,7 @@ async fn build_fee_data_response(
             rate: 1.0,
             min_fee: None,
             expiry,
-            gas_price: fees.gas_price.clone(),
+            gas_price: hex_to_decimal(&fees.gas_price),
             max_fee_per_gas: fees.max_fee_per_gas.clone(),
             max_priority_fee_per_gas: fees.max_priority_fee_per_gas.clone(),
             fee_collector: fee_collector.clone(),
@@ -1102,7 +1109,7 @@ async fn build_fee_data_response(
             rate: 2000.0,
             min_fee: None,
             expiry,
-            gas_price: fees.gas_price.clone(),
+            gas_price: hex_to_decimal(&fees.gas_price),
             max_fee_per_gas: fees.max_fee_per_gas.clone(),
             max_priority_fee_per_gas: fees.max_priority_fee_per_gas.clone(),
             fee_collector: fee_collector.clone(),
@@ -1189,7 +1196,7 @@ async fn build_fee_data_response(
         rate,
         min_fee: None,
         expiry,
-        gas_price: fees.gas_price,
+        gas_price: hex_to_decimal(&fees.gas_price),
         max_fee_per_gas: fees.max_fee_per_gas,
         max_priority_fee_per_gas: fees.max_priority_fee_per_gas,
         fee_collector,
@@ -1660,8 +1667,8 @@ async fn fetch_and_store_receipt(
             let status_ok = r.status();
             let receipt = SpecReceipt {
                 block_hash: format!("0x{:x}", r.block_hash.unwrap_or_default()),
-                block_number: format!("0x{:x}", r.block_number.unwrap_or_default()),
-                gas_used: format!("0x{:x}", r.gas_used),
+                block_number: r.block_number.unwrap_or_default().to_string(),
+                gas_used: r.gas_used.to_string(),
                 logs: Some(
                     r.inner
                         .logs()
