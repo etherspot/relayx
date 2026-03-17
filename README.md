@@ -75,6 +75,8 @@ cargo build --release
 | `--db-path` | — | `./relayx_db` | RocksDB path |
 | `--config` | `RELAYX_CONFIG` | — | JSON config file path |
 | `--relayer-private-key` | `RELAYX_PRIVATE_KEY` | — | Hex-encoded signer key |
+| `--disable-simulation` | `RELAYX_DISABLE_SIMULATION` | `false` | Skip pre-flight simulation (use default gas limit) |
+| `--disable-multichain` | `RELAYX_DISABLE_MULTICHAIN` | `false` | Return `4212` for `relayer_sendTransactionMultichain` calls |
 
 Additional environment variables:
 
@@ -94,7 +96,12 @@ Additional environment variables:
   "log_level": "info",
   "relayerPrivateKey": "0x...",
   "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
+  "feeCollectors": {
+    "1":   "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
+    "137": "0x66f3a93f544e01ce4378d25e927d7c493b863bd7"
+  },
   "defaultToken": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "disableMultichain": false,
   "rpcs": {
     "1":   "https://ethereum.publicnode.com",
     "137": "https://polygon-rpc.com"
@@ -116,6 +123,8 @@ Additional environment variables:
 }
 ```
 
+> **`feeCollectors`** (optional) — per-chain overrides for the fee collector address. Takes precedence over the global `feeCollector` value for the specified chain.
+
 ## JSON-RPC Methods
 
 All methods use JSON-RPC 2.0. The server listens on `POST /`.
@@ -134,7 +143,7 @@ Submit a single transaction for relay.
 | `payment` | `Payment` | ✅ | How the relayer fee is paid |
 | `to` | `string` | ✅ | Smart account (wallet) address |
 | `data` | `string` | ✅ | ABI-encoded `executeWithRelayer(...)` calldata |
-| `context` | `object` | — | Arbitrary metadata; `callbackUrl` is read from here |
+| `context` | `object` | — | Arbitrary metadata; `callbackUrl` and `expiry` are read from here |
 | `authorizationList` | `AuthorizationItem[]` | — | EIP-7702 authorization entries |
 | `taskId` | `string` | — | Client-provided 32-byte hex task ID (`0x`-prefixed, 66 chars) |
 
@@ -275,8 +284,8 @@ Query the status of a submitted transaction.
     "hash": "0x9b7bb827...",
     "receipt": {
       "blockHash":        "0xf19bbafd...",
-      "blockNumber":      "0xabcd",
-      "gasUsed":          "0xdef",
+      "blockNumber":      "43981",
+      "gasUsed":          "3567",
       "transactionHash":  "0x9b7bb827...",
       "logs": [
         {
@@ -361,7 +370,10 @@ Get current fee pricing for a token on a chain.
 | `chainId` | Chain the fee data applies to |
 | `token` | Token descriptor (`address`, `decimals`) |
 | `rate` | Tokens per 1 unit of native currency (e.g. USDC/ETH ≈ 2000.5); always `1.0` for native |
-| `gasPrice` | Current gas price in wei (hex string) |
+| `gasPrice` | Current gas price in wei (decimal string) |
+| `maxFeePerGas` | EIP-1559 max fee per gas in wei (decimal string, omitted on pre-EIP-1559 chains) |
+| `maxPriorityFeePerGas` | EIP-1559 max priority fee per gas in wei (decimal string, omitted on pre-EIP-1559 chains) |
+| `feeCollector` | Address clients should send payment tokens to (mirrors `relayer_getCapabilities`) |
 | `expiry` | Unix timestamp when this quote expires |
 | `minFee` | Minimum fee in token units (optional) |
 | `context` | Opaque signed quote context (optional) |
@@ -386,7 +398,10 @@ curl -X POST http://localhost:4937 \
     "chainId": "1",
     "token": { "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "decimals": 6 },
     "rate": 2000.5,
-    "gasPrice": "0x4a817c800",
+    "gasPrice": "20000000000",
+    "maxFeePerGas": "40000000000",
+    "maxPriorityFeePerGas": "1000000000",
+    "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
     "expiry": 1741234867
   },
   "id": 1
@@ -434,7 +449,8 @@ Pass a `callbackUrl` inside `context` to receive a `POST` when the transaction s
   "to": "0x...",
   "data": "0x...",
   "context": {
-    "callbackUrl": "https://yourapp.com/webhook/relay-status"
+    "callbackUrl": "https://yourapp.com/webhook/relay-status",
+    "expiry": 1741234867
   }
 }
 ```
@@ -466,17 +482,28 @@ Callback failures are logged and silently dropped; they never affect the relay f
 
 ## Error Codes
 
-| Code | Name | Description |
+Full set of spec-defined error codes (per the [Generic Relayer Architecture spec](https://hackmd.io/T4TkZYFQQnCupiuW231DYw)):
+
+| Code | Name | Where raised |
 |------|------|-------------|
-| 4200 | Invalid Params | Missing or malformed request fields |
-| 4201 | Unsupported Chain | Chain ID not in relayer's config |
-| 4202 | Simulation Failed | `eth_call` reverted during pre-flight check |
-| 4203 | Insufficient Balance | Wallet balance too low to cover gas |
-| 4204 | Invalid Authorization List | Malformed EIP-7702 authorization entries |
-| 4205 | Unsupported Payment Token | ERC-20 token not in configured token list |
-| 4206 | Unsupported Capability | Payment type not supported |
-| 4207 | Task Not Found | No request found for given task ID |
-| 4214 | Duplicate Task ID | Client-provided task ID already in use |
+| `-32602` | Invalid Params | Missing or malformed request fields |
+| `4200` | Insufficient Payment | Fee-verification middleware: payment below required minimum |
+| `4201` | Invalid Signature | Signature-validation middleware: signer mismatch |
+| `4202` | Unsupported Payment Token | ERC-20 token not in configured token list |
+| `4203` | Rate Limit Exceeded | Rate-limiting middleware: per-address or per-key quota exceeded |
+| `4204` | Quote Expired | `context.expiry` is in the past at submission time |
+| `4205` | Insufficient Balance | Wallet native balance too low to cover gas cost |
+| `4206` | Unsupported Chain | Chain ID not in relayer's config |
+| `4207` | Transaction Too Large | Calldata exceeds 128 KB |
+| `4208` | Unknown Transaction ID | No request found for the given task ID |
+| `4209` | Unsupported Capability | Payment type not supported |
+| `4210` | Invalid Authorization List | Malformed EIP-7702 authorization entries |
+| `4211` | Simulation Failed | `eth_call` reverted during pre-flight check |
+| `4212` | Multichain Not Supported | `--disable-multichain` is set on this instance |
+| `4213` | Invalid Task ID | Client-provided `taskId` is not a valid 32-byte hex string |
+| `4214` | Duplicate Task ID | Client-provided `taskId` already has an associated job |
+
+> Codes `4200`, `4201`, and `4203` are available as `pub(crate)` helpers for operators adding auth or rate-limiting middleware; they are not raised by the core relay path itself.
 
 ---
 
@@ -533,7 +560,7 @@ Background Monitor (tokio::spawn)
 # Build
 cargo build --release
 
-# Run all tests (28 tests, ~20ms)
+# Run all tests (40 tests: 12 unit + 28 integration, ~20ms)
 cargo test
 
 # Lint

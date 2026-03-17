@@ -322,7 +322,7 @@ mod send_transaction_multichain_tests {
     #[test]
     fn test_multichain_basic_request() {
         // Per spec: first item has payment, subsequent items are sponsored
-        let items = vec![
+        let items = [
             make_payment_tx("1", "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6"),
             make_sponsored_tx("8453", "0x8922b54716264130634d6ff183747a8ead91a40c"),
         ];
@@ -336,7 +336,7 @@ mod send_transaction_multichain_tests {
         let items: Vec<SendTransactionParams> = vec![];
         assert!(items.is_empty(), "empty list is invalid per spec");
 
-        let single = vec![make_payment_tx(
+        let single = [make_payment_tx(
             "1",
             "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6",
         )];
@@ -345,7 +345,7 @@ mod send_transaction_multichain_tests {
 
     #[test]
     fn test_multichain_first_has_payment_rest_are_sponsored() {
-        let items = vec![
+        let items = [
             make_payment_tx("1", "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6"),
             make_sponsored_tx("10", "0xaaaa35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6"),
             make_sponsored_tx("137", "0xbbbb35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6"),
@@ -361,7 +361,7 @@ mod send_transaction_multichain_tests {
 
     #[test]
     fn test_multichain_different_chains() {
-        let chains = vec!["1", "10", "137", "8453", "42161"];
+        let chains = ["1", "10", "137", "8453", "42161"];
         let mut items = vec![make_payment_tx(
             chains[0],
             "0x742d35Cc6C3C3f4b4C1b3cd6c0d1b6C2B3d4e5f6",

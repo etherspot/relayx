@@ -338,7 +338,9 @@ async fn fetch_gas_fees(chain_id: u64, cfg: &Config) -> Result<GasFees, String> 
 /// Returns the input unchanged if it cannot be parsed, so callers always get a valid string.
 fn hex_to_decimal(hex: &str) -> String {
     let s = hex.strip_prefix("0x").unwrap_or(hex);
-    u128::from_str_radix(s, 16).map(|v| v.to_string()).unwrap_or_else(|_| hex.to_string())
+    u128::from_str_radix(s, 16)
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| hex.to_string())
 }
 
 fn bump_gas_price_hex(gas_price_hex: &str, percent: u64) -> String {
@@ -1891,11 +1893,14 @@ mod tests {
         };
 
         // Single item should fail
-        let err =
-            super::process_send_transaction_multichain(storage.clone(), &[item.clone()], &cfg)
-                .await
-                .err()
-                .unwrap();
+        let err = super::process_send_transaction_multichain(
+            storage.clone(),
+            std::slice::from_ref(&item),
+            &cfg,
+        )
+        .await
+        .err()
+        .unwrap();
         assert_eq!(err.code, jsonrpc_core::ErrorCode::InvalidParams);
     }
 
