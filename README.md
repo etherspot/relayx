@@ -109,10 +109,16 @@ Additional environment variables:
   "chainlink": {
     "tokenUsd": {
       "1": {
-        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": "0x8fFfFD4AfB6115b954Bd326cbe7B4BA576818f6"
+        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48": {
+          "oracle": "0x8fFfFD4AfB6115b954Bd326cbe7B4BA576818f6",
+          "decimals": 6
+        }
       },
       "137": {
-        "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174": "0xAB594600376Ec9fD91F8e885dADF0CE036862dE0"
+        "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174": {
+          "oracle": "0xAB594600376Ec9fD91F8e885dADF0CE036862dE0",
+          "decimals": 6
+        }
       }
     },
     "nativeUsd": {
@@ -624,3 +630,23 @@ docker buildx build \
 ## License
 
 MIT
+
+## Linting and Formatting
+
+```bash
+# format code
+cargo fmt --all
+
+# check formatting only
+cargo fmt --all -- --check
+# or: cargo fmt-check
+# or: make fmt-check
+
+# run clippy with warnings denied
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+# or: cargo lint
+# or: make clippy
+
+# run both checks
+make lint-check
+```

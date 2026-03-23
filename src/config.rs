@@ -3,6 +3,8 @@ use std::{fs, path::PathBuf, sync::OnceLock};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
+use crate::types::TokenDetails;
+
 #[derive(Parser, Debug, Clone, Serialize, Deserialize)]
 #[command(name = "relayx")]
 #[command(about = "A modular relayer service with JSON-RPC endpoints")]
@@ -169,17 +171,48 @@ impl Config {
             .map(|s| s.to_string())
     }
 
-    /// Returns Chainlink token/USD aggregator address for a given chain and token address
-    /// Expects JSON structure: { "chainlink": { "tokenUsd": { "1": { "0xToken": "0xFeed" } } } }
+    /// Returns Chainlink token/USD aggregator address for a given chain and token address.
+    /// Supports both config formats:
+    /// 1) legacy: { "chainlink": { "tokenUsd": { "1": { "0xToken": "0xFeed" } } } }
+    /// 2) object: { "chainlink": { "tokenUsd": { "1": { "0xToken": { "oracle": "0xFeed", "decimals": 6 } } } } }
     pub fn chainlink_token_usd(&self, chain_id: &str, token_address: &str) -> Option<String> {
-        let root = self.get_json_config()?;
-        let token_lc = token_address.to_lowercase();
-        root.get("chainlink")
-            .and_then(|c| c.get("tokenUsd"))
-            .and_then(|chains| chains.get(chain_id))
-            .and_then(|map| map.get(&token_lc))
+        let token_cfg = self.chainlink_token_usd_entry(chain_id, token_address)?;
+        if let Some(oracle) = token_cfg.as_str() {
+            return Some(oracle.to_string());
+        }
+        token_cfg
+            .get("oracle")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
+    }
+
+    /// Returns configured token decimals for a chain/token entry when provided in config.
+    /// Returns None for legacy tokenUsd string format entries.
+    pub fn chainlink_token_decimals(&self, chain_id: &str, token_address: &str) -> Option<u8> {
+        let token_cfg = self.chainlink_token_usd_entry(chain_id, token_address)?;
+        token_cfg
+            .get("decimals")
+            .and_then(|v| v.as_u64())
+            .and_then(|n| u8::try_from(n).ok())
+    }
+
+    fn chainlink_token_usd_entry(
+        &self,
+        chain_id: &str,
+        token_address: &str,
+    ) -> Option<&serde_json::Value> {
+        let chain_tokens = self
+            .get_json_config()?
+            .get("chainlink")
+            .and_then(|c| c.get("tokenUsd"))
+            .and_then(|chains| chains.get(chain_id))
+            .and_then(|v| v.as_object())?;
+
+        let token_lc = token_address.to_ascii_lowercase();
+        chain_tokens
+            .iter()
+            .find(|(addr, _)| addr.to_ascii_lowercase() == token_lc)
+            .map(|(_, cfg)| cfg)
     }
 
     /// Effective HTTP address from config.json or CLI
@@ -284,6 +317,46 @@ impl Config {
         // Remove duplicates and sort for consistency
         tokens.sort();
         tokens.dedup();
+        tokens
+    }
+
+    /// Returns supported ERC20 token details for a specific chain ID.
+    /// Reads entries from `chainlink.tokenUsd.<chain_id>.<token>`.
+    /// Supports both token entry formats:
+    /// - legacy string: "0xOracle"
+    /// - object: { "oracle": "0xOracle", "decimals": 6 }
+    pub fn get_supported_token(&self, chain_id: &str) -> Vec<TokenDetails> {
+        let root = match self.get_json_config() {
+            Some(config) => config,
+            None => return Vec::new(),
+        };
+
+        let mut tokens = Vec::new();
+        if let Some(chain_tokens) = root
+            .get("chainlink")
+            .and_then(|c| c.get("tokenUsd"))
+            .and_then(|chains| chains.get(chain_id))
+            .and_then(|v| v.as_object())
+        {
+            for (address, cfg) in chain_tokens {
+                let decimals = cfg
+                    .get("decimals")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|n| u8::try_from(n).ok())
+                    .unwrap_or(18);
+                tokens.push(TokenDetails {
+                    address: address.clone(),
+                    decimals,
+                });
+            }
+        }
+
+        tokens.sort_by(|a, b| {
+            a.address
+                .to_ascii_lowercase()
+                .cmp(&b.address.to_ascii_lowercase())
+        });
+        tokens.dedup_by(|a, b| a.address.eq_ignore_ascii_case(&b.address));
         tokens
     }
 
