@@ -21,22 +21,24 @@ pub async fn process_get_capabilities(
     let mut result: HashMap<String, ChainCapabilities> = HashMap::new();
 
     let chains_to_process: Vec<String> = if params_chains.is_empty() {
-        supported_chains.clone()
+        if supported_chains.is_empty() {
+            vec!["1".to_string()]
+        } else {
+            supported_chains.clone()
+        }
     } else {
         params_chains.to_vec()
     };
 
     chains_to_process.iter().for_each(|chain_id| {
-        if supported_chains.contains(chain_id) {
-            let supported_tokens = cfg.get_supported_token(chain_id);
-            result.insert(
-                chain_id.to_string(),
-                ChainCapabilities {
-                    fee_collector: fee_collector.clone(),
-                    tokens: supported_tokens,
-                },
-            );
-        }
+        let supported_tokens = cfg.get_supported_token(chain_id);
+        result.insert(
+            chain_id.to_string(),
+            ChainCapabilities {
+                fee_collector: fee_collector.clone(),
+                tokens: supported_tokens,
+            },
+        );
     });
 
     Ok(result)
