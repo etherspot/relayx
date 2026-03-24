@@ -318,3 +318,13 @@ pub struct QuoteResponse {
     #[serde(rename = "revertReason")]
     pub revert_reason: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GasFees {
+    /// Legacy / base gas price (hex wei). Always present.
+    pub gas_price: String,
+    /// EIP-1559 max fee per gas (hex wei). None on pre-EIP-1559 chains.
+    pub max_fee_per_gas: Option<String>,
+    /// EIP-1559 max priority fee per gas (hex wei). None on pre-EIP-1559 chains.
+    pub max_priority_fee_per_gas: Option<String>,
+}

@@ -111,3 +111,20 @@ help:
 	@echo "watch        - Watch for changes and rebuild"
 	@echo "help         - Show this help message"
 
+
+# Check formatting without modifying files
+.PHONY: fmt-check
+fmt-check:
+	@echo "Checking formatting..."
+	cargo fmt --all -- --check
+
+# Run clippy with warnings denied
+.PHONY: clippy
+clippy:
+	@echo "Running clippy..."
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Run formatting check + clippy
+.PHONY: lint-check
+lint-check: fmt-check clippy
+	@echo "Lint checks passed!"
