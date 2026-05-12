@@ -1,11 +1,11 @@
-use std::{fs, path::PathBuf, sync::OnceLock};
+use std::{fmt, fs, path::PathBuf, sync::OnceLock};
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
 use crate::types::TokenDetails;
 
-#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
+#[derive(Parser, Clone, Serialize, Deserialize)]
 #[command(name = "relayx")]
 #[command(about = "A modular relayer service with JSON-RPC endpoints")]
 pub struct Config {
@@ -75,6 +75,42 @@ pub struct Config {
     pub disable_multichain: bool,
 }
 
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("rpc_host", &self.rpc_host)
+            .field("rpc_port", &self.rpc_port)
+            .field("db_path", &self.db_path)
+            .field("relayers", &self.relayers)
+            .field("max_concurrent_requests", &self.max_concurrent_requests)
+            .field("request_timeout", &self.request_timeout)
+            .field("config_path", &self.config_path)
+            .field("http_address", &self.http_address)
+            .field("http_port", &self.http_port)
+            .field("http_cors", &self.http_cors)
+            .field("log_level", &self.log_level)
+            .field(
+                "relayer_private_key",
+                &self
+                    .relayer_private_key
+                    .as_ref()
+                    .map(|_| "<redacted>")
+                    .unwrap_or("<none>"),
+            )
+            .field("disable_simulation", &self.disable_simulation)
+            .field(
+                "sentry_dsn",
+                &self
+                    .sentry_dsn
+                    .as_ref()
+                    .map(|_| "<redacted>")
+                    .unwrap_or("<none>"),
+            )
+            .field("disable_multichain", &self.disable_multichain)
+            .finish()
+    }
+}
+
 impl Config {
     /// Cached parsed JSON config (loaded once globally)
     fn get_json_config(&self) -> Option<&'static serde_json::Value> {
@@ -99,6 +135,35 @@ impl Config {
             Some(value)
         }
     }
+
+    /// Short, non-secret configuration summary for tracing at startup.
+    pub fn log_summary_for_tracing(&self) -> String {
+        format!(
+            "http={}:{} db_path={:?} config_path={:?} disable_simulation={} disable_multichain={} relayer_private_key={} sentry_cli_dsn={} sentry_effective_dsn={}",
+            self.get_http_address(),
+            self.get_http_port(),
+            self.db_path,
+            self.config_path,
+            self.disable_simulation,
+            self.disable_multichain,
+            if self.relayer_private_key.as_ref().is_some_and(|s| !s.is_empty()) {
+                "<set>"
+            } else {
+                "<none>"
+            },
+            if self.sentry_dsn.as_ref().is_some_and(|s| !s.is_empty()) {
+                "<set>"
+            } else {
+                "<none>"
+            },
+            if self.get_sentry_dsn().is_some() {
+                "<set>"
+            } else {
+                "<none>"
+            },
+        )
+    }
+
     /// Parse relayers string into a vector of addresses
     pub fn get_relayer_addresses(&self) -> Vec<String> {
         if self.relayers.is_empty() {

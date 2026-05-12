@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
     };
 
     tracing::info!("Starting RelayX service");
-    tracing::debug!("Configuration: {:?}", config);
+    tracing::debug!(summary = %config.log_summary_for_tracing(), "loaded configuration");
     tracing::info!("Log level set to: {}", filter_str);
 
     // Initialize storage

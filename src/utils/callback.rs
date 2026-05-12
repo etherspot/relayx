@@ -5,10 +5,24 @@
 //! (max 100 items per request in that spec; we send one item per callback) of flattened
 //! status objects using `chainIndex`, `requestId`, `txHash`, etc.
 
+use std::sync::OnceLock;
+
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{config::Config, RelayerRequest, SpecStatusResponse};
+
+fn webhook_http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("reqwest webhook client builder")
+    })
+}
 
 /// Convert a decimal quantity string (e.g. block number from receipts) to a `0x` hex string
 /// as required by the OKX transaction-status webhook for `blockHeight` / `gasUsed`.
@@ -113,6 +127,9 @@ pub fn build_okx_transaction_status_item(
 /// POST the status update to the callback URL as a **JSON array** of
 /// [`OkxTransactionStatusItem`] (OKX “Submit Intent Status” wire format).
 ///
+/// Uses a shared HTTP client: **no redirects** (mitigates SSRF redirect chains; issue #30),
+/// 30s total / 10s connect timeout.
+///
 /// Failures are logged and silently swallowed — a failed callback never affects the relay flow.
 pub async fn fire_callback(req: &RelayerRequest, status: &SpecStatusResponse, cfg: &Config) {
     let url = match &req.callback_url {
@@ -123,12 +140,7 @@ pub async fn fire_callback(req: &RelayerRequest, status: &SpecStatusResponse, cf
     let item = build_okx_transaction_status_item(req, status, cfg);
     let payload = vec![item];
 
-    match reqwest::Client::new()
-        .post(&url)
-        .json(&payload)
-        .send()
-        .await
-    {
+    match webhook_http_client().post(&url).json(&payload).send().await {
         Ok(resp) => {
             tracing::info!(
                 "Callback delivered for task_id {} → {} (HTTP {})",

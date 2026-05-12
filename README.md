@@ -497,6 +497,21 @@ Callbacks fire on all terminal states:
 
 Callback failures are logged and silently dropped; they never affect the relay flow.
 
+### Callback URL safety (SSRF)
+
+Before a job is stored, `callbackUrl` is validated (`src/utils/callback_security.rs`):
+
+- **HTTPS only** (no `http://` or exotic schemes).
+- No **userinfo** (`https://user:pass@…` is rejected).
+- Host must not be a **reserved / non-public** IP (private, loopback, link-local, documentation, unspecified, IPv6 ULA, etc.). Domain names are **DNS-resolved**; every resolved address must be allowed.
+
+Outbound webhook HTTP uses **no redirects** and bounded timeouts (`src/utils/callback.rs`).
+
+| Environment variable | Purpose |
+|----------------------|---------|
+| `RELAYX_CALLBACK_ALLOW_LOOPBACK=true` | Allow `127.0.0.1` / `::1` as callback targets (local development only). |
+| `RELAYX_CALLBACK_SKIP_SSRF_CHECKS=true` | **Dangerous:** skip host/IP checks (parse-only). For isolated tests only. |
+
 ---
 
 ## Error Codes
