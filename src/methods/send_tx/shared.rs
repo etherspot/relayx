@@ -12,6 +12,7 @@ use crate::{
     },
     utils::{
         callback::fire_callback,
+        callback_security,
         errors::rpc_errors::{
             insufficient_balance_error, invalid_params_error, quote_expired_error,
             simulation_failed_error, transaction_too_large_error, unsupported_capability_error,
@@ -174,6 +175,12 @@ pub async fn process_single_transaction(
         .and_then(|ctx| ctx.get("callbackUrl"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+
+    if let Some(ref u) = callback_url {
+        callback_security::validate_outbound_webhook_url(u)
+            .await
+            .map_err(|_| invalid_params_error())?;
+    }
 
     let internal_id = Uuid::new_v4();
 
