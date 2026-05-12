@@ -467,4 +467,18 @@ impl Config {
             })
             .unwrap_or_else(|| "https://api.etherscan.io/v2/api".to_string())
     }
+
+    /// OKX / WaaS-style chain index for outbound status webhooks.
+    ///
+    /// Reads `{ "chainIndices": { "1": "1", "8453": "8453" } }` from the JSON config when
+    /// present. Otherwise returns the decimal EIP-155 `chainId` string (many networks share
+    /// the same numeric value as OKX `chainIndex`; see OKX docs for exceptions).
+    pub fn chain_index_for_chain_id(&self, chain_id: &str) -> String {
+        self.get_json_config()
+            .and_then(|root| root.get("chainIndices"))
+            .and_then(|m| m.get(chain_id))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| chain_id.to_string())
+    }
 }
