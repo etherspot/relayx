@@ -161,7 +161,7 @@ pub async fn fetch_and_store_receipt(
                     message: None,
                     data: None,
                 };
-                fire_callback(req, &status_resp).await;
+                fire_callback(req, &status_resp, cfg).await;
                 Some(receipt)
             } else {
                 let msg = "onchain revert".to_string();
@@ -177,7 +177,7 @@ pub async fn fetch_and_store_receipt(
                     message: Some(msg),
                     data: None,
                 };
-                fire_callback(req, &status_resp).await;
+                fire_callback(req, &status_resp, cfg).await;
                 None
             }
         }

@@ -399,7 +399,12 @@ impl RpcServer {
                                                                 message: Some(e),
                                                                 data: None,
                                                             };
-                                                            fire_callback(&req, &status_resp).await;
+                                                            fire_callback(
+                                                                &req,
+                                                                &status_resp,
+                                                                &cfg_bg,
+                                                            )
+                                                            .await;
                                                         }
                                                     }
                                                 }

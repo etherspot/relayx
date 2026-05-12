@@ -88,6 +88,8 @@ Additional environment variables:
 
 ### JSON Config File
 
+Optional **`chainIndices`** maps EIP-155 `chainId` strings to OKX-style `chainIndex` values for [status webhooks](#webhook-callbacks). When omitted, the decimal `chainId` is sent as `chainIndex`.
+
 ```json
 {
   "http_address": "0.0.0.0",
@@ -95,6 +97,10 @@ Additional environment variables:
   "http_cors": "*",
   "log_level": "info",
   "relayerPrivateKey": "0x...",
+  "chainIndices": {
+    "1": "1",
+    "8453": "8453"
+  },
   "feeCollector": "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
   "feeCollectors": {
     "1":   "0x55f3a93f544e01ce4378d25e927d7c493b863bd6",
@@ -461,18 +467,25 @@ Pass a `callbackUrl` inside `context` to receive a `POST` when the transaction s
 }
 ```
 
-The payload POSTed to your URL is the `relayer_getStatus` response with `taskId` at the top level:
+The HTTP body is a **JSON array** with one element, matching the OKX Wallet “Submit Intent Status” shape ([Relayer Integration API](https://hackmd.io/@michaelwong/SJVSZ1wcgx)): flattened fields, string timestamps and status codes, and `blockHeight` / `gasUsed` as `0x` hex quantities when a receipt is available.
 
 ```json
-{
-  "taskId":    "0x0e670ec6...",
-  "chainId":   "137",
-  "createdAt": 1741234567,
-  "status":    200,
-  "hash":      "0x9b7bb827...",
-  "receipt":   { ... }
-}
+[
+  {
+    "timestamp": "1755914000",
+    "requestId": "550e8400-e29b-41d4-a716-446655440000",
+    "taskId": "0x0e670ec64341771606e55d6b4ca35a1a6b75ee3d5145a99d05921026d1527331",
+    "chainIndex": "137",
+    "status": "200",
+    "blockHash": "0x6789b0746d84002f2f258129cfd9714d412e78b4d91b8e61608fac9165988baf",
+    "blockHeight": "0x22a1e6e",
+    "gasUsed": "0x9cf2",
+    "txHash": "0xd9b01a72502e7f518fb043bfacd1e13b07f24995f404f8cbb60a1212ca8b4c42"
+  }
+]
 ```
+
+For failures, `errorMessage` is set (and optional `errorData`) per the same integration guide. `chainIndex` defaults to the request’s decimal `chainId` unless you configure `chainIndices` in `config.json`.
 
 Callbacks fire on all terminal states:
 
