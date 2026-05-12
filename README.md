@@ -375,7 +375,7 @@ Get current fee pricing for a token on a chain.
 |-------|-------------|
 | `chainId` | Chain the fee data applies to |
 | `token` | Token descriptor (`address`, `decimals`) |
-| `rate` | Tokens per 1 unit of native currency (e.g. USDC/ETH ≈ 2000.5); always `1.0` for native |
+| `rate` | Tokens per 1 unit of native currency (e.g. USDC/ETH ≈ 2000.5), rounded to 6 decimal places; always `1.0` for native |
 | `gasPrice` | Current gas price in wei (decimal string) |
 | `maxFeePerGas` | EIP-1559 max fee per gas in wei (decimal string, omitted on pre-EIP-1559 chains) |
 | `maxPriorityFeePerGas` | EIP-1559 max priority fee per gas in wei (decimal string, omitted on pre-EIP-1559 chains) |

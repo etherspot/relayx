@@ -1,5 +1,5 @@
 use alloy::{
-    primitives::{Address, Bytes},
+    primitives::{Address, Bytes, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::TransactionRequest,
 };
@@ -17,6 +17,49 @@ use crate::{
     },
     Config, FeeDataParams, FeeDataResponse, GasFees, TokenDetails,
 };
+
+const RATE_DECIMALS: usize = 6;
+
+fn pow10_u256(exp: u32) -> Option<U256> {
+    let mut result = U256::from(1u8);
+    for _ in 0..exp {
+        result = result.checked_mul(U256::from(10u8))?;
+    }
+    Some(result)
+}
+
+fn scaled_u256_to_f64(value: U256, decimals: usize) -> Option<f64> {
+    let digits = value.to_string();
+    let decimal = if decimals == 0 {
+        digits
+    } else if digits.len() > decimals {
+        let split = digits.len() - decimals;
+        format!("{}.{}", &digits[..split], &digits[split..])
+    } else {
+        format!("0.{digits:0>width$}", width = decimals)
+    };
+
+    decimal.parse().ok()
+}
+
+fn rounded_rate_from_oracle_answers(
+    native_px: i128,
+    native_dec: u8,
+    token_px: i128,
+    token_dec: u8,
+) -> Option<f64> {
+    if native_px <= 0 || token_px <= 0 {
+        return None;
+    }
+
+    // Keep the ratio exact in integer space, then round once to the public 6-decimal API.
+    let numerator = U256::from(native_px as u128)
+        .checked_mul(pow10_u256(token_dec as u32 + RATE_DECIMALS as u32)?)?;
+    let denominator = U256::from(token_px as u128).checked_mul(pow10_u256(native_dec as u32)?)?;
+    let rounded_scaled = numerator.checked_add(denominator / U256::from(2u8))? / denominator;
+
+    scaled_u256_to_f64(rounded_scaled, RATE_DECIMALS)
+}
 
 /// Build a spec-compliant relayer_getFeeData response.
 pub async fn build_fee_data_response(
@@ -141,16 +184,11 @@ pub async fn build_fee_data_response(
     let native_px = read_latest_answer(&rpc_url, &native_feed_addr).await;
     let token_px = read_latest_answer(&rpc_url, &token_feed_addr).await;
 
-    let (native_usd, token_usd) = match (native_px, token_px) {
-        (Some(n), Some(t)) if n > 0 && t > 0 => (
-            n as f64 / 10f64.powi(native_dec as i32),
-            t as f64 / 10f64.powi(token_dec as i32),
-        ),
+    let rate = match (native_px, token_px) {
+        (Some(n), Some(t)) => rounded_rate_from_oracle_answers(n, native_dec, t, token_dec),
         _ => return Err(unsupported_payment_token_error()),
-    };
-
-    // rate = tokens per 1 native = native_usd / token_usd
-    let rate = native_usd / token_usd;
+    }
+    .ok_or_else(unsupported_payment_token_error)?;
 
     async fn read_erc20_decimals(rpc_url: &str, token: &str) -> Option<u8> {
         let sel: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
@@ -180,4 +218,27 @@ pub async fn build_fee_data_response(
         fee_collector,
         context: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rounded_rate_from_oracle_answers;
+
+    #[test]
+    fn rounds_rate_half_up_to_six_decimals() {
+        let rate = rounded_rate_from_oracle_answers(123_456_750, 8, 100_000_000, 8).unwrap();
+        assert!((rate - 1.234568).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rounds_recurring_decimal_rate_deterministically() {
+        let rate = rounded_rate_from_oracle_answers(200_000_000, 8, 300_000_000, 8).unwrap();
+        assert!((rate - 0.666667).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rejects_non_positive_oracle_answers() {
+        assert!(rounded_rate_from_oracle_answers(0, 8, 1, 8).is_none());
+        assert!(rounded_rate_from_oracle_answers(1, 8, -1, 8).is_none());
+    }
 }

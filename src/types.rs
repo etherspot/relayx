@@ -239,7 +239,7 @@ pub struct FeeDataResponse {
     pub chain_id: String,
     pub token: TokenDetails,
     /// Tokens per 1 unit of native currency (e.g., USDC/ETH = 2000.5).
-    /// For native token payments this is always 1.0.
+    /// Rounded to 6 decimal places; for native token payments this is always 1.0.
     pub rate: f64,
     /// Minimum fee denominated in token units (human-readable), if applicable.
     #[serde(rename = "minFee", skip_serializing_if = "Option::is_none")]
