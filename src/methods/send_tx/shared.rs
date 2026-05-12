@@ -248,7 +248,7 @@ pub async fn process_single_transaction(
                     message: Some(e),
                     data: None,
                 };
-                fire_callback(&relayer_request, &status_resp).await;
+                fire_callback(&relayer_request, &status_resp, cfg).await;
             }
         }
     }
