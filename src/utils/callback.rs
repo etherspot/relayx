@@ -23,7 +23,7 @@ fn decimal_string_to_hex_quantity(s: &str) -> Option<String> {
         }
         return None;
     }
-    let n = u128::from_str_radix(t, 10).ok()?;
+    let n = t.parse::<u128>().ok()?;
     Some(format!("0x{:x}", n))
 }
 
@@ -102,7 +102,7 @@ pub fn build_okx_transaction_status_item(
         }
         400 | 500 => {
             item.error_message = Some(status.message.clone().unwrap_or_default());
-            item.error_data = status.data.as_ref().map(|d| error_data_to_string(d));
+            item.error_data = status.data.as_ref().map(error_data_to_string);
         }
         _ => {}
     }
@@ -222,7 +222,7 @@ mod tests {
         };
 
         let item = build_okx_transaction_status_item(&req, &status, &cfg);
-        let json = serde_json::to_value(&vec![item]).unwrap();
+        let json = serde_json::to_value(vec![item]).unwrap();
         assert!(json.is_array());
         let row = &json[0];
         assert_eq!(row["chainIndex"], "1");
