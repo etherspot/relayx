@@ -8,22 +8,18 @@ use std::net::IpAddr;
 
 use url::Url;
 
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
 fn ssrf_checks_disabled() -> bool {
-    matches!(
-        std::env::var("RELAYX_CALLBACK_SKIP_SSRF_CHECKS")
-            .map(|v| { matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on") })
-            .unwrap_or(false),
-        true
-    )
+    env_truthy("RELAYX_CALLBACK_SKIP_SSRF_CHECKS")
 }
 
 fn allow_loopback_callback_targets() -> bool {
-    matches!(
-        std::env::var("RELAYX_CALLBACK_ALLOW_LOOPBACK")
-            .map(|v| { matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on") })
-            .unwrap_or(false),
-        true
-    )
+    env_truthy("RELAYX_CALLBACK_ALLOW_LOOPBACK")
 }
 
 /// True when this IP must not be used as a webhook target (strict default).

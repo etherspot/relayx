@@ -1,0 +1,20 @@
+# Legacy CircleCI project hook: relayx CI runs on GitHub Actions (.github/workflows/).
+# This minimal pipeline keeps the CircleCI app from failing with "no configuration found"
+# until the project is disabled in the CircleCI UI.
+version: 2.1
+
+jobs:
+  noop:
+    docker:
+      - image: cimg/base:2024.02
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: Skip (use GitHub Actions)
+          command: echo "Primary CI is GitHub Actions; see .github/workflows/"
+
+workflows:
+  default:
+    jobs:
+      - noop
