@@ -117,7 +117,7 @@ When an error occurs, the result array can contain an error object:
 
 ### quote.rate
 
-The exchange rate represents how much of the specified token is needed per unit of gas. For example:
+The exchange rate represents how much of the specified token is needed per unit of gas. RelayX rounds this numeric value to 6 decimal places before returning it. For example:
 - A rate of `0.001` for ETH means 0.001 ETH per gas unit
 - A rate of `0.0032` for USDC means 0.0032 USDC per gas unit
 
