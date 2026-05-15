@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-alloy = { version = "0.6", default-features = false, features = ["json-abi", "network", "provider-http", "rpc-types-eth", "signer-local", "serde", "hyper"] }
+alloy = { version = "0.6", default-features = false, features = ["json-abi", "network", "provider-http", "rpc-types-eth", "signer-local", "serde", "hyper", "reqwest-rustls-tls"] }
 alloy-eip7702 = { version = "0.4", features = ["k256", "serde"] }
 alloy-rlp = "0.3"
 anyhow = "1.0"

@@ -150,8 +150,8 @@ pub async fn build_fee_data_response(
         .ok_or_else(unsupported_chain_error)?;
 
     async fn eth_call_bytes(rpc_url: &str, to_address: &str, calldata: &[u8]) -> Option<Vec<u8>> {
-        let provider = ProviderBuilder::new().on_hyper_http(Url::parse(rpc_url).ok()?);
-        let to: Address = to_address.parse().ok()?;
+        let provider = ProviderBuilder::new().on_http(Url::parse(rpc_url).unwrap());
+        let to: Address = to_address.parse().unwrap();
         let tx = TransactionRequest::default()
             .to(to)
             .input(Bytes::from(calldata.to_vec()).into());
