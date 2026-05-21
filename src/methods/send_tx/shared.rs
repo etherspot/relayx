@@ -149,7 +149,7 @@ pub async fn process_single_transaction(
 
             if let Some(rpc_url) = cfg.rpc_url_for_chain(&chain_id.to_string()) {
                 if let Ok(endpoint) = Url::parse(&rpc_url) {
-                    let provider = ProviderBuilder::new().on_hyper_http(endpoint);
+                    let provider = ProviderBuilder::new().on_http(endpoint);
                     if let Ok(balance) = provider.get_balance(wallet_address).await {
                         if balance < required {
                             return Err(insufficient_balance_error());

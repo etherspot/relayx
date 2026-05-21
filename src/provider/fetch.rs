@@ -17,7 +17,7 @@ pub async fn fetch_receipt_for_status(
     }
 
     let rpc_url = cfg.rpc_url_for_chain(&chain_id.to_string())?;
-    let provider = ProviderBuilder::new().on_hyper_http(Url::parse(&rpc_url).ok()?);
+    let provider = ProviderBuilder::new().on_http(Url::parse(&rpc_url).ok()?);
 
     let hash_hex = tx_hash.strip_prefix("0x").unwrap_or(tx_hash);
     let hash_bytes = hex::decode(hash_hex).ok()?;
@@ -70,7 +70,7 @@ pub async fn fetch_gas_fees(chain_id: u64, cfg: &Config) -> Result<GasFees, Stri
         .ok_or_else(|| format!("No RPC URL configured for chain {}", chain_id))?;
 
     let rpc_endpoint = Url::parse(&rpc_url).map_err(|e| format!("Invalid RPC URL: {}", e))?;
-    let provider = ProviderBuilder::new().on_hyper_http(rpc_endpoint);
+    let provider = ProviderBuilder::new().on_http(rpc_endpoint);
 
     let gas_price = match provider.get_gas_price().await {
         Ok(p) => format!("0x{:x}", p),
@@ -115,7 +115,7 @@ pub async fn fetch_and_store_receipt(
     }
 
     let rpc_url = cfg.rpc_url_for_chain(&req.chain_id.to_string())?;
-    let provider = ProviderBuilder::new().on_hyper_http(Url::parse(&rpc_url).ok()?);
+    let provider = ProviderBuilder::new().on_http(Url::parse(&rpc_url).ok()?);
 
     let hash_hex = tx_hash.strip_prefix("0x").unwrap_or(tx_hash);
     let hash_bytes = hex::decode(hash_hex).ok()?;

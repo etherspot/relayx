@@ -47,7 +47,7 @@ pub async fn send_relay_transaction(
     let provider = ProviderBuilder::new()
         .with_recommended_fillers()
         .wallet(wallet)
-        .on_hyper_http(rpc_endpoint);
+        .on_http(rpc_endpoint);
 
     let to_address: Address = wallet_address
         .parse()

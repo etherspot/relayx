@@ -60,7 +60,7 @@ pub async fn simulate_transaction(
     }
 
     let rpc_endpoint = Url::parse(&rpc_url).map_err(|e| format!("Invalid RPC URL: {}", e))?;
-    let provider = ProviderBuilder::new().on_hyper_http(rpc_endpoint);
+    let provider = ProviderBuilder::new().on_http(rpc_endpoint);
 
     let tx = TransactionRequest::default()
         .to(wallet_addr)
